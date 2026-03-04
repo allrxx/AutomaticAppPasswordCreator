@@ -22,6 +22,20 @@ const terminalStates = new Set(["completed", "completed_with_errors", "failed"])
 let activeJobId = null;
 let pollTimer = null;
 let latestJob = null;
+let autoDeployTimer = null;
+let autoDeploySeconds = 5;
+
+const deployCountdown = document.getElementById("deployCountdown");
+const cancelDeployBtn = document.getElementById("cancelDeployBtn");
+
+if (cancelDeployBtn) {
+  cancelDeployBtn.addEventListener("click", () => {
+    if (autoDeployTimer) clearInterval(autoDeployTimer);
+    if (latestJob) latestJob.autoDeployHandled = true;
+    cancelDeployBtn.classList.add("hidden");
+    deployCountdown.classList.add("hidden");
+  });
+}
 
 function formToPayload(formElement) {
   const data = new FormData(formElement);
@@ -272,6 +286,9 @@ function resetView() {
   downloadCsv.classList.add("hidden");
   deployBtn.classList.add("hidden");
   deployBtn.disabled = false;
+  if (cancelDeployBtn) cancelDeployBtn.classList.add("hidden");
+  if (deployCountdown) deployCountdown.classList.add("hidden");
+  if (autoDeployTimer) clearInterval(autoDeployTimer);
   logStream.textContent = "Waiting for server logs...";
 
   stageItems.forEach((item) => {
@@ -311,10 +328,40 @@ function renderJob(job) {
 
   // Show deploy button only if job is completed
   if (terminalStates.has(job.status)) {
-    deployBtn.classList.remove("hidden");
-    deployBtn.disabled = false;
+    const overallSuccess = job.status === "completed";
+
+    if (overallSuccess && !job.autoDeployHandled) {
+      deployBtn.classList.remove("hidden");
+      deployBtn.disabled = false;
+      cancelDeployBtn.classList.remove("hidden");
+      deployCountdown.classList.remove("hidden");
+
+      autoDeploySeconds = 5;
+      deployCountdown.textContent = `${autoDeploySeconds}s`;
+
+      autoDeployTimer = setInterval(() => {
+        autoDeploySeconds -= 1;
+        if (autoDeploySeconds <= 0) {
+          clearInterval(autoDeployTimer);
+          job.autoDeployHandled = true;
+          cancelDeployBtn.classList.add("hidden");
+          deployCountdown.classList.add("hidden");
+          deployBtn.click();
+        } else {
+          deployCountdown.textContent = `${autoDeploySeconds}s`;
+        }
+      }, 1000);
+
+      // Mark handled immediately so we don't start multiple timers on next poll
+      job.autoDeployHandled = true;
+    } else if (overallSuccess || job.autoDeployHandled) {
+      deployBtn.classList.remove("hidden");
+      deployBtn.disabled = false;
+    }
   } else {
     deployBtn.classList.add("hidden");
+    if (cancelDeployBtn) cancelDeployBtn.classList.add("hidden");
+    if (deployCountdown) deployCountdown.classList.add("hidden");
   }
 }
 
@@ -441,6 +488,10 @@ deployBtn.addEventListener("click", async (event) => {
   }
 
   deployBtn.disabled = true;
+  if (cancelDeployBtn) cancelDeployBtn.classList.add("hidden");
+  if (deployCountdown) deployCountdown.classList.add("hidden");
+  if (autoDeployTimer) clearInterval(autoDeployTimer);
+
   const originalText = deployBtn.textContent;
   deployBtn.textContent = "Deploying...";
 

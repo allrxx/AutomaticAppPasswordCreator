@@ -1,127 +1,139 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mail Automation Control Panel</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <div class="bg-glow bg-glow-a"></div>
-    <div class="bg-glow bg-glow-b"></div>
 
-    <main class="container" role="main">
-      <header class="hero">
-        <p class="eyebrow">AutomaticAppPasswordCreator</p>
-        <h1>Mailbox + App Password + Validation Workflow</h1>
-        <p class="subtitle">
-          Create mailboxes in Mailcow, generate app passwords from webmail, and validate SMTP/IMAP delivery in one run.
-        </p>
-      </header>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mail Automation Control Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
 
-      <section class="panel run-panel">
-        <h2>Start New Run</h2>
-        <form id="jobForm" class="run-form">
-          <div class="run-row-vertical">
-            <div>
-              <label for="countInput">Number of emails to create</label>
-              <input id="countInput" name="count" type="number" min="1" value="5" required />
-            </div>
-            <div>
-              <label for="deploymentSelect">Target Deployment</label>
-              <select id="deploymentSelect" name="deployment" required>
-                <option value="">Select a deployment...</option>
-                <option value="prod">Production</option>
-                <option value="staging">Staging</option>
-                <option value="dev" selected>Development</option>
-                <option value="demo">Demo</option>
-                <option value="cazelabs">Caze Labs</option>
-              </select>
-            </div>
-          </div>
-          <div class="run-row">
-            <button id="startBtn" type="submit">Run Workflow</button>
-          </div>
-          <p class="meta">
-            All other settings are preconfigured on the server from environment variables.
-          </p>
-        </form>
-      </section>
+<body>
+  <div class="bg-glow bg-glow-a"></div>
+  <div class="bg-glow bg-glow-b"></div>
 
-      <section class="panel status-panel">
-        <div class="status-top">
+  <main class="container" role="main">
+    <header class="hero">
+      <p class="eyebrow">AutomaticAppPasswordCreator</p>
+      <h1>Mailbox + App Password + Validation Workflow</h1>
+      <p class="subtitle">
+        Create mailboxes in Mailcow, generate app passwords from webmail, and validate SMTP/IMAP delivery in one run.
+      </p>
+    </header>
+
+    <section class="panel run-panel">
+      <h2>Start New Run</h2>
+      <form id="jobForm" class="run-form">
+        <div class="run-row-vertical">
           <div>
-            <p class="status-kicker">Run Status</p>
-            <h2 id="stageTitle">Waiting to start</h2>
-            <p id="stageText" class="meta">Stage 0/3</p>
+            <label for="countInput">Number of emails to create</label>
+            <input id="countInput" name="count" type="number" min="1" value="5" required />
           </div>
-          <span id="jobBadge" class="badge idle">Idle</span>
+          <div>
+            <label for="deploymentSelect">Target Deployment</label>
+            <select id="deploymentSelect" name="deployment" required>
+              <option value="">Select a deployment...</option>
+              <option value="prod">Production</option>
+              <option value="staging">Staging</option>
+              <option value="dev" selected>Development</option>
+              <option value="demo">Demo</option>
+              <option value="cazelabs">Caze Labs</option>
+            </select>
+          </div>
         </div>
-
-        <ol class="stage-track" id="stageTrack">
-          <li class="stage-item" data-stage="1">
-            <span>1</span>
-            Create Mailboxes
-          </li>
-          <li class="stage-item" data-stage="2">
-            <span>2</span>
-            Generate App Passwords
-          </li>
-          <li class="stage-item" data-stage="3">
-            <span>3</span>
-            Validate Delivery
-          </li>
-        </ol>
-
-        <div class="progress-wrap">
-          <div id="progressBar" class="progress-bar"></div>
+        <div class="run-row">
+          <button id="startBtn" type="submit">Run Workflow</button>
         </div>
-        <p id="progressText" class="meta">0% complete</p>
-        <p id="jobMeta" class="meta">No job started yet.</p>
+        <p class="meta">
+          All other settings are preconfigured on the server from environment variables.
+        </p>
+      </form>
+    </section>
 
-        <div id="summary" class="summary-grid"></div>
-
-        <div class="action-buttons">
-          <a id="downloadCsv" href="#" class="hidden download-link">Download CSV Results</a>
-          <button id="deployBtn" class="hidden deploy-button">Deploy to Backend</button>
+    <section class="panel status-panel">
+      <div class="status-top">
+        <div>
+          <p class="status-kicker">Run Status</p>
+          <h2 id="stageTitle">Waiting to start</h2>
+          <p id="stageText" class="meta">Stage 0/3</p>
         </div>
-      </section>
+        <span id="jobBadge" class="badge idle">Idle</span>
+      </div>
 
-      <section class="panel logs-panel">
-        <h2>Execution Logs</h2>
-        <p class="meta">Detailed step-by-step execution history.</p>
-        <label class="toggle-line" for="showDebugLogs">
-          <input id="showDebugLogs" type="checkbox" />
-          Show debug entries
-        </label>
-        <div id="logStream" class="log-stream">No execution logs yet.</div>
-      </section>
+      <ol class="stage-track" id="stageTrack">
+        <li class="stage-item" data-stage="1">
+          <span>1</span>
+          Create Mailboxes
+        </li>
+        <li class="stage-item" data-stage="2">
+          <span>2</span>
+          Generate App Passwords
+        </li>
+        <li class="stage-item" data-stage="3">
+          <span>3</span>
+          Validate Delivery
+        </li>
+      </ol>
 
-      <section class="panel table-panel">
-        <h2>Results</h2>
-        <div class="table-wrap">
-          <table id="resultsTable">
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Password</th>
-                <th>App Password</th>
-                <th>Mailbox</th>
-                <th>SMTP</th>
-                <th>IMAP</th>
-                <th>Status</th>
-                <th>Error</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+      <div class="progress-wrap">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+      <p id="progressText" class="meta">0% complete</p>
+      <p id="jobMeta" class="meta">No job started yet.</p>
+
+      <div id="summary" class="summary-grid"></div>
+
+      <div class="action-buttons">
+        <div class="action-primary">
+          <button id="deployBtn" class="hidden deploy-button btn-primary">
+            Deploy to Backend <span id="deployCountdown" class="countdown-badge hidden"></span>
+          </button>
+          <button id="cancelDeployBtn" class="hidden btn-secondary">Cancel</button>
         </div>
-      </section>
-    </main>
+        <div class="action-secondary">
+          <a id="downloadCsv" href="#" class="hidden download-link btn-ghost">Download CSV Results</a>
+        </div>
+      </div>
+    </section>
 
-    <script src="/app.js"></script>
-  </body>
+    <section class="panel logs-panel">
+      <h2>Execution Logs</h2>
+      <p class="meta">Detailed step-by-step execution history.</p>
+      <label class="toggle-line" for="showDebugLogs">
+        <input id="showDebugLogs" type="checkbox" />
+        Show debug entries
+      </label>
+      <div id="logStream" class="log-stream">No execution logs yet.</div>
+    </section>
+
+    <section class="panel table-panel">
+      <h2>Results</h2>
+      <div class="table-wrap">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Password</th>
+              <th>App Password</th>
+              <th>Mailbox</th>
+              <th>SMTP</th>
+              <th>IMAP</th>
+              <th>Status</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+
 </html>
