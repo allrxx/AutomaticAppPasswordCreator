@@ -29,12 +29,12 @@
     <section class="panel run-panel">
       <h2>Start New Run</h2>
       <form id="jobForm" class="run-form">
-        <div class="run-row-vertical">
-          <div>
-            <label for="countInput">Number of emails to create</label>
+        <div class="run-inputs">
+          <div class="input-group">
+            <label for="countInput">Emails to create</label>
             <input id="countInput" name="count" type="number" min="1" value="5" required />
           </div>
-          <div>
+          <div class="input-group">
             <label for="deploymentSelect">Target Deployment</label>
             <select id="deploymentSelect" name="deployment" required>
               <option value="">Select a deployment...</option>
@@ -45,13 +45,8 @@
               <option value="cazelabs">Caze Labs</option>
             </select>
           </div>
+          <button id="startBtn" type="submit" class="btn-primary start-workflow-btn">Run Workflow</button>
         </div>
-        <div class="run-row">
-          <button id="startBtn" type="submit">Run Workflow</button>
-        </div>
-        <p class="meta">
-          All other settings are preconfigured on the server from environment variables.
-        </p>
       </form>
     </section>
 
@@ -95,24 +90,30 @@
           </button>
           <button id="cancelDeployBtn" class="hidden btn-secondary">Cancel</button>
         </div>
-        <div class="action-secondary">
-          <a id="downloadCsv" href="#" class="hidden download-link btn-ghost">Download CSV Results</a>
-        </div>
       </div>
     </section>
 
     <section class="panel logs-panel">
-      <h2>Execution Logs</h2>
-      <p class="meta">Detailed step-by-step execution history.</p>
-      <label class="toggle-line" for="showDebugLogs">
-        <input id="showDebugLogs" type="checkbox" />
-        Show debug entries
-      </label>
-      <div id="logStream" class="log-stream">No execution logs yet.</div>
+      <details class="logs-accordion">
+        <summary>
+          <h2>Execution Logs</h2>
+          <span class="meta">Detailed step-by-step execution history.</span>
+        </summary>
+        <div class="logs-controls">
+          <label class="toggle-line" for="showDebugLogs">
+            <input id="showDebugLogs" type="checkbox" />
+            Show debug entries
+          </label>
+        </div>
+        <div id="logStream" class="log-stream">No execution logs yet.</div>
+      </details>
     </section>
 
     <section class="panel table-panel">
-      <h2>Results</h2>
+      <div class="table-header">
+        <h2>Results</h2>
+        <a id="downloadCsv" href="#" class="hidden download-link btn-ghost">Download CSV Results</a>
+      </div>
       <div class="table-wrap">
         <table id="resultsTable">
           <thead>

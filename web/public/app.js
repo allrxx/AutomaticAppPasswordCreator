@@ -150,23 +150,31 @@ function renderSummary(summary) {
     return;
   }
 
-  const cards = [
-    { label: "Total", value: summary.total },
-    { label: "Mailboxes", value: summary.mailboxCreated },
-    { label: "App Passwords", value: summary.appPasswords },
-    { label: "SMTP", value: summary.smtpSent },
-    { label: "IMAP", value: summary.imapVerified },
-    { label: "Success", value: summary.success },
-    { label: "Failed", value: summary.failed },
-  ];
+  const cards = [];
+
+  if (summary.mailboxCreated > 0 || summary.total > 0) {
+    cards.push({ label: "Mailboxes", value: summary.mailboxCreated });
+  }
+  if (summary.appPasswords > 0) {
+    cards.push({ label: "App Passwords", value: summary.appPasswords });
+  }
+  if (summary.smtpSent > 0) {
+    cards.push({ label: "SMTP", value: summary.smtpSent });
+  }
+  if (summary.imapVerified > 0) {
+    cards.push({ label: "IMAP", value: summary.imapVerified });
+  }
+
+  cards.push({ label: "Success", value: summary.success });
+  cards.push({ label: "Failed", value: summary.failed });
 
   summaryEl.innerHTML = cards
     .map(
       (card) => `
-      <article class="summary-card">
+      <div class="summary-card ${card.label === 'Failed' && card.value > 0 ? 'has-error' : ''}">
         <span class="label">${escapeHtml(card.label)}</span>
         <span class="value">${escapeHtml(card.value)}</span>
-      </article>
+      </div>
     `
     )
     .join("");
@@ -240,32 +248,31 @@ function renderTechnicalLogs(logs) {
 
   logStream.innerHTML = entries
     .map((entry) => {
+      const timeStr = entry.ts ? formatClock(entry.ts) : "";
+
       if (entry.level === "golden") {
         return `
-          <article class="log-line golden">
-            <div class="log-meta">
-              <span class="log-time">${escapeHtml(entry.ts || "")}</span>
-              <span class="log-level golden">deploy script</span>
-            </div>
-            <p class="log-message golden-title">${escapeHtml(entry.message || "")}</p>
+          <div class="log-line golden">
+            <span class="log-time">[${escapeHtml(timeStr)}]</span>
+            <span class="log-level golden">DEPLOY</span>
+            <span class="log-message">${escapeHtml(entry.message || "")}</span>
             <div class="golden-body">${entry.details || ""}</div>
-          </article>
+          </div>
         `;
       }
 
       const details = formatDetails(entry.details);
+      const level = (entry.level || "info");
+
       return `
-        <article class="log-line ${escapeHtml(entry.level || "info")}">
-          <div class="log-meta">
-            <span class="log-time">${escapeHtml(entry.ts || "")}</span>
-            <span class="log-level ${escapeHtml(entry.level || "info")}">${escapeHtml(entry.level || "info")}</span>
-          </div>
-          <p class="log-message">${escapeHtml(entry.message || "")}</p>
+        <div class="log-line ${escapeHtml(level)}">
+          <span class="log-time">[${escapeHtml(timeStr)}]</span>
+          <span class="log-level ${escapeHtml(level)}">${escapeHtml(level)}</span>
+          <span class="log-message">${escapeHtml(entry.message || "")}</span>
           ${details
           ? `<details><summary>Details</summary><pre>${escapeHtml(details)}</pre></details>`
-          : ""
-        }
-        </article>
+          : ""}
+        </div>
       `;
     })
     .join("");
@@ -311,8 +318,10 @@ function renderJob(job) {
   progressBar.style.width = `${progress.percent}%`;
   progressText.textContent = `${progress.percent}% complete${progress.detail ? ` • ${progress.detail}` : ""}`;
 
-  const deploymentLabel = job.configPublic?.deployment ? ` | Deployment: ${job.configPublic.deployment}` : "";
-  jobMeta.textContent = `Job: ${job.id} | Started: ${formatTime(job.startedAt || job.createdAt)} | Updated: ${formatTime(job.updatedAt)} | Finished: ${formatTime(job.finishedAt)}${deploymentLabel}`;
+  const deploymentLabel = job.configPublic?.deployment ? ` • Deploy: ${job.configPublic.deployment}` : "";
+  const startedStr = formatTime(job.startedAt || job.createdAt);
+  const finishedStr = terminalStates.has(job.status) && job.finishedAt ? ` • Finished: ${formatTime(job.finishedAt)}` : "";
+  jobMeta.innerHTML = `<strong>Job:</strong> ${job.id.split('-')[0]} • <strong>Started:</strong> ${startedStr}${finishedStr}${deploymentLabel}`;
 
   renderStageTrack(job.status, progress);
   renderTechnicalLogs(job.logs || []);
