@@ -4,13 +4,60 @@ Automates app password creation for mailboxes on `mail.cazehiresense.com`.
 
 ---
 
+## Web Control Panel (Create -> App Password -> Validate)
+
+Use the new UI when you want one workflow that:
+1. Creates mailboxes from Mailcow API
+2. Generates app passwords in webmail with Playwright
+3. Sends SMTP test emails and verifies via IMAP
+
+### Run
+
+```powershell
+cd web
+npm install
+npm start
+```
+
+Open: `http://localhost:3000`
+
+### Setup Environment (required once)
+
+```powershell
+cd web
+copy .env.example .env
+```
+
+Edit `.env` and set sensitive values:
+- `MAILCOW_API_KEY`
+- `VALIDATION_RECEIVER_EMAIL` (optional)
+- `VALIDATION_RECEIVER_APP_PASSWORD` (optional)
+
+Everything else is preconfigured to your existing script defaults (`mail.cazehiresense.com`, `cazehiresense.com`, app name `hiresense`).
+
+If receiver values are empty, SMTP validation auto-sends to each mailbox itself.
+If receiver values are provided, IMAP inbox verification is enabled.
+
+### UI Input
+
+The user only enters:
+- `Number of emails to create`
+
+### Output
+
+- Live progress and logs in the browser
+- Per-mailbox result table (email, password, app password, status)
+- Downloadable CSV: `web/output/<job-id>.csv`
+
+---
+
 ## Installation (First Time Setup)
 
 1. **Install Node.js** (v18 or higher) from [nodejs.org](https://nodejs.org)
 
 2. **Install dependencies:**
    ```powershell
-   cd c:\Users\alexj\Downloads\Test\automation
+   cd automation
    npm install playwright csv-parse csv-stringify
    ```
 
@@ -26,7 +73,7 @@ Automates app password creation for mailboxes on `mail.cazehiresense.com`.
 1. **Replace `emails.csv`** with your data (keep the same column format). JUST EXPORT THE GOOGLE SHEET AS CSV FILE
 2. **Run the script:**
    ```powershell
-   cd c:\Users\alexj\Downloads\Test\automation
+   cd automation
    node ProcessAllCandidates.js
    ```
 3. **Results saved to:** `emails-results.csv`

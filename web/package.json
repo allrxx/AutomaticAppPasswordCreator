@@ -1,0 +1,21 @@
+{
+  "name": "mail-automation-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frontend + backend orchestrator for mailbox creation, app password generation, and validation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "imapflow": "^1.0.173",
+    "nodemailer": "^6.10.1",
+    "playwright": "^1.58.0"
+  }
+}

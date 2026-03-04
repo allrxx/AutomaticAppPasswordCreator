@@ -1,0 +1,9 @@
+# Web UI dependencies and generated artifacts
+web/node_modules/
+web/output/*.csv
+web/.env
+
+# Temporary automation artifacts
+automation/videos/
+automation/*.png
+automation/*.html

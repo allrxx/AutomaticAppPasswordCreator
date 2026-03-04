@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mail Automation Control Panel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+
+    <main class="container">
+      <header class="hero">
+        <p class="eyebrow">AutomaticAppPasswordCreator</p>
+        <h1>Mailbox + App Password + Validation Workflow</h1>
+        <p class="subtitle">
+          Create mailboxes in Mailcow, generate app passwords from webmail, and validate SMTP/IMAP delivery in one run.
+        </p>
+      </header>
+
+      <section class="panel">
+        <form id="jobForm" class="form-grid">
+          <h2>Start New Run</h2>
+
+          <label>
+            Number of emails to create
+            <input name="count" type="number" min="1" value="5" required />
+          </label>
+
+          <p class="meta helper">
+            All other settings are preconfigured on the server from environment variables.
+          </p>
+
+          <div class="actions">
+            <button id="startBtn" type="submit">Start Workflow</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel status-panel">
+        <div class="status-head">
+          <h2>Run Status</h2>
+          <span id="jobBadge" class="badge idle">Idle</span>
+        </div>
+
+        <p id="jobMeta" class="meta">No job started yet.</p>
+
+        <div class="progress-wrap">
+          <div id="progressBar" class="progress-bar"></div>
+        </div>
+        <p id="progressText" class="meta">Progress: 0%</p>
+
+        <div id="summary"></div>
+
+        <div class="download-row">
+          <a id="downloadCsv" href="#" class="hidden">Download CSV Results</a>
+        </div>
+      </section>
+
+      <section class="panel logs-panel">
+        <h2>Logs</h2>
+        <pre id="logs">No logs yet.</pre>
+      </section>
+
+      <section class="panel table-panel">
+        <h2>Results</h2>
+        <div class="table-wrap">
+          <table id="resultsTable">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Password</th>
+                <th>App Password</th>
+                <th>Mailbox</th>
+                <th>SMTP</th>
+                <th>IMAP</th>
+                <th>Status</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
