@@ -90,24 +90,14 @@
         </div>
       </section>
 
-      <section class="content-grid">
-        <section class="panel activity-panel">
-          <h2>Activity Feed</h2>
-          <p class="meta">Human-friendly updates to track progress without noise.</p>
-          <ul id="activityFeed" class="activity-feed">
-            <li class="empty-state">No activity yet.</li>
-          </ul>
-        </section>
-
-        <section class="panel logs-panel">
-          <h2>Technical Logs</h2>
-          <p class="meta">Detailed logs for troubleshooting and crash analysis.</p>
-          <label class="toggle-line" for="showDebugLogs">
-            <input id="showDebugLogs" type="checkbox" />
-            Show debug entries
-          </label>
-          <div id="logStream" class="log-stream">No technical logs yet.</div>
-        </section>
+      <section class="panel logs-panel">
+        <h2>Execution Logs</h2>
+        <p class="meta">Detailed step-by-step execution history.</p>
+        <label class="toggle-line" for="showDebugLogs">
+          <input id="showDebugLogs" type="checkbox" />
+          Show debug entries
+        </label>
+        <div id="logStream" class="log-stream">No execution logs yet.</div>
       </section>
 
       <section class="panel table-panel">

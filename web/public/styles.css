@@ -184,7 +184,7 @@ select:focus {
   flex-wrap: wrap;
 }
 
-.run-row-vertical > div {
+.run-row-vertical>div {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -409,61 +409,6 @@ button:disabled {
   grid-template-columns: 1.2fr 1fr;
 }
 
-.activity-feed {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  max-height: 340px;
-  overflow: auto;
-  display: grid;
-  gap: 8px;
-}
-
-.activity-item {
-  border: 1px solid rgba(82, 82, 91, 0.7);
-  background: rgba(39, 39, 42, 0.6);
-  border-radius: var(--radius-sm);
-  padding: 10px;
-}
-
-.activity-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.activity-time {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-}
-
-.activity-level {
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  font-size: 0.68rem;
-  font-weight: 700;
-}
-
-.activity-item.info .activity-level {
-  color: #93c5fd;
-}
-
-.activity-item.warn .activity-level {
-  color: #fcd34d;
-}
-
-.activity-item.error .activity-level {
-  color: #fca5a5;
-}
-
-.activity-message {
-  margin: 0;
-  font-size: 0.86rem;
-  line-height: 1.4;
-}
-
 .toggle-line {
   display: inline-flex;
   align-items: center;
@@ -475,7 +420,7 @@ button:disabled {
 
 .log-stream {
   margin-top: 10px;
-  max-height: 340px;
+  max-height: 500px;
   overflow: auto;
   border: 1px solid rgba(82, 82, 91, 0.75);
   border-radius: var(--radius-sm);
@@ -492,6 +437,46 @@ button:disabled {
   padding: 8px;
   display: grid;
   gap: 6px;
+}
+
+.log-line.info {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+.log-line.warn {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.log-line.error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+/* Golden log UI for deploy script execution */
+.log-line.golden {
+  background: linear-gradient(145deg, rgba(217, 119, 6, 0.15), rgba(245, 158, 11, 0.08));
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.05);
+}
+
+.log-level.golden {
+  background: rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+}
+
+.golden-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fde68a;
+  margin-bottom: 4px;
+}
+
+.golden-body {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(245, 158, 11, 0.3);
 }
 
 .log-meta {
@@ -643,8 +628,8 @@ th {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 10px;
-  border: 1px solid rgba(82, 82, 91, 0.5);
-  background: rgba(24, 24, 27, 0.7);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: rgba(24, 24, 27, 0.5);
   font-size: 0.82rem;
 }
 

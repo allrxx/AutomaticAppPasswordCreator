@@ -9,7 +9,6 @@ const progressText = document.getElementById("progressText");
 const jobMeta = document.getElementById("jobMeta");
 const summaryEl = document.getElementById("summary");
 
-const activityFeed = document.getElementById("activityFeed");
 const showDebugLogs = document.getElementById("showDebugLogs");
 const logStream = document.getElementById("logStream");
 
@@ -201,72 +200,6 @@ function renderRows(rows) {
   tableBody.appendChild(fragment);
 }
 
-function friendlyMessage(entry) {
-  const message = String(entry?.message || "");
-
-  let match = message.match(/^\[(\d+)\/(\d+)\] Mailbox created: (.+)$/);
-  if (match) return `Mailbox ${match[1]} of ${match[2]} created: ${match[3]}`;
-
-  match = message.match(/^\[(\d+)\/(\d+)\] Mailbox create failed: (.+)$/);
-  if (match) return `Mailbox ${match[1]} of ${match[2]} failed: ${match[3]}`;
-
-  match = message.match(/^\[(\d+)\/(\d+)\] App password created: (.+)$/);
-  if (match) return `App password ${match[1]} of ${match[2]} created for ${match[3]}`;
-
-  match = message.match(/^\[(\d+)\/(\d+)\] App password failed: (.+)$/);
-  if (match) return `App password ${match[1]} of ${match[2]} failed: ${match[3]}`;
-
-  match = message.match(/^\[(\d+)\/(\d+)\] SMTP sent: (.+) -> (.+)$/);
-  if (match) return `SMTP test ${match[1]} of ${match[2]} sent from ${match[3]} to ${match[4]}`;
-
-  match = message.match(/^\[(\d+)\/(\d+)\] SMTP failed: (.+)$/);
-  if (match) return `SMTP test ${match[1]} of ${match[2]} failed: ${match[3]}`;
-
-  if (message === "Job queued") return "Request accepted and queued.";
-  if (message === "Workflow started") return "Workflow execution started.";
-  if (message.startsWith("Generated ") && message.endsWith(" mailbox records")) {
-    return message.replace("Generated", "Prepared");
-  }
-  if (message === "Receiver app password not provided. IMAP verification skipped.") {
-    return "IMAP verification skipped because receiver credentials are not configured.";
-  }
-  if (message === "VALIDATION_RECEIVER_EMAIL not set. SMTP validation will send each email to itself.") {
-    return "Validation receiver email is not set; SMTP checks are running in self-send mode.";
-  }
-  if (message === "Result CSV written") return "Result file generated and ready for download.";
-  if (message.startsWith("Workflow complete.")) return message;
-  if (message.startsWith("Workflow failed:")) return message;
-  if (message.startsWith("IMAP verification complete:")) return message;
-
-  return message;
-}
-
-function renderActivity(logs) {
-  if (!logs || logs.length === 0) {
-    activityFeed.innerHTML = '<li class="empty-state">No activity yet.</li>';
-    return;
-  }
-
-  const entries = logs
-    .filter((entry) => entry.level !== "debug")
-    .slice(-80)
-    .map((entry) => {
-      const level = entry.level || "info";
-      return `
-        <li class="activity-item ${escapeHtml(level)}">
-          <div class="activity-head">
-            <span class="activity-time">${escapeHtml(formatClock(entry.ts))}</span>
-            <span class="activity-level">${escapeHtml(level)}</span>
-          </div>
-          <p class="activity-message">${escapeHtml(friendlyMessage(entry))}</p>
-        </li>
-      `;
-    });
-
-  activityFeed.innerHTML = entries.join("") || '<li class="empty-state">No activity yet.</li>';
-  activityFeed.scrollTop = activityFeed.scrollHeight;
-}
-
 function formatDetails(details) {
   if (details === undefined) return "";
   if (typeof details === "string") return details;
@@ -279,7 +212,7 @@ function formatDetails(details) {
 
 function renderTechnicalLogs(logs) {
   if (!logs || logs.length === 0) {
-    logStream.textContent = "No technical logs yet.";
+    logStream.textContent = "No execution logs yet.";
     return;
   }
 
@@ -287,15 +220,28 @@ function renderTechnicalLogs(logs) {
   const entries = logs.filter((entry) => includeDebug || entry.level !== "debug").slice(-240);
 
   if (entries.length === 0) {
-    logStream.textContent = "No technical logs for current filter.";
+    logStream.textContent = "No execution logs for current filter.";
     return;
   }
 
   logStream.innerHTML = entries
     .map((entry) => {
+      if (entry.level === "golden") {
+        return `
+          <article class="log-line golden">
+            <div class="log-meta">
+              <span class="log-time">${escapeHtml(entry.ts || "")}</span>
+              <span class="log-level golden">deploy script</span>
+            </div>
+            <p class="log-message golden-title">${escapeHtml(entry.message || "")}</p>
+            <div class="golden-body">${entry.details || ""}</div>
+          </article>
+        `;
+      }
+
       const details = formatDetails(entry.details);
       return `
-        <article class="log-line">
+        <article class="log-line ${escapeHtml(entry.level || "info")}">
           <div class="log-meta">
             <span class="log-time">${escapeHtml(entry.ts || "")}</span>
             <span class="log-level ${escapeHtml(entry.level || "info")}">${escapeHtml(entry.level || "info")}</span>
@@ -326,7 +272,6 @@ function resetView() {
   downloadCsv.classList.add("hidden");
   deployBtn.classList.add("hidden");
   deployBtn.disabled = false;
-  activityFeed.innerHTML = '<li class="empty-state">Preparing workflow...</li>';
   logStream.textContent = "Waiting for server logs...";
 
   stageItems.forEach((item) => {
@@ -353,7 +298,6 @@ function renderJob(job) {
   jobMeta.textContent = `Job: ${job.id} | Started: ${formatTime(job.startedAt || job.createdAt)} | Updated: ${formatTime(job.updatedAt)} | Finished: ${formatTime(job.finishedAt)}${deploymentLabel}`;
 
   renderStageTrack(job.status, progress);
-  renderActivity(job.logs || []);
   renderTechnicalLogs(job.logs || []);
   renderRows(job.rows || []);
   renderSummary(job.summary);
@@ -451,24 +395,18 @@ form.addEventListener("submit", async (event) => {
     stageText.textContent = "Stage 0/3";
     progressText.textContent = "0% complete";
     jobMeta.textContent = "Fix server configuration and try again.";
-    activityFeed.innerHTML = `
-      <li class="activity-item error">
-        <div class="activity-head">
-          <span class="activity-time">${escapeHtml(formatClock(new Date().toISOString()))}</span>
-          <span class="activity-level">error</span>
-        </div>
-        <p class="activity-message">${escapeHtml(error.message)}</p>
-      </li>
-    `;
-    logStream.innerHTML = `
-      <article class="log-line">
-        <div class="log-meta">
-          <span class="log-time">${escapeHtml(new Date().toISOString())}</span>
-          <span class="log-level error">error</span>
-        </div>
-        <p class="log-message">${escapeHtml(error.message)}</p>
-      </article>
-    `;
+
+    // Fallback if there is no job yet
+    if (!latestJob) {
+      latestJob = { logs: [] };
+    }
+    latestJob.logs.push({
+      ts: new Date().toISOString(),
+      level: "error",
+      message: "Could not start workflow",
+      details: error.message,
+    });
+    renderTechnicalLogs(latestJob.logs);
   }
 });
 function renderDeploySteps(steps) {
@@ -548,33 +486,25 @@ deployBtn.addEventListener("click", async (event) => {
     deployBtn.textContent = "Deployed ✓";
     deployBtn.disabled = true;
 
-    const entry = `
-      <li class="activity-item info">
-        <div class="activity-head">
-          <span class="activity-time">${now}</span>
-          <span class="activity-level">info</span>
-        </div>
-        <p class="activity-message">Successfully deployed ${escapeHtml(String(data.credentialsCount || 0))} credentials to ${escapeHtml(data.deployment || "unknown")} backend</p>
-        <div class="deploy-log">${stepsHtml}</div>
-        ${rawOutputHtml}
-      </li>
-    `;
-    activityFeed.innerHTML = entry + activityFeed.innerHTML;
+    if (!latestJob) latestJob = { logs: [] };
+    latestJob.logs.push({
+      ts: new Date().toISOString(),
+      level: "golden",
+      message: `Successfully deployed ${data.credentialsCount || 0} credentials to ${data.deployment || "unknown"} backend.`,
+      details: `<div class="deploy-log">${stepsHtml}</div>${rawOutputHtml}`,
+    });
+    renderTechnicalLogs(latestJob.logs);
   } else {
     deployBtn.disabled = false;
     deployBtn.textContent = originalText;
 
-    const entry = `
-      <li class="activity-item error">
-        <div class="activity-head">
-          <span class="activity-time">${now}</span>
-          <span class="activity-level">error</span>
-        </div>
-        <p class="activity-message">Deployment failed: ${escapeHtml(data.error || "Unknown error")}</p>
-        <div class="deploy-log">${stepsHtml}</div>
-        ${rawOutputHtml}
-      </li>
-    `;
-    activityFeed.innerHTML = entry + activityFeed.innerHTML;
+    if (!latestJob) latestJob = { logs: [] };
+    latestJob.logs.push({
+      ts: new Date().toISOString(),
+      level: "golden",
+      message: `Deployment failed: ${data.error || "Unknown error"}`,
+      details: `<div class="deploy-log">${stepsHtml}</div>${rawOutputHtml}`,
+    });
+    renderTechnicalLogs(latestJob.logs);
   }
 });
