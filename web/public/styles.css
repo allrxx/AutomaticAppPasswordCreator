@@ -389,19 +389,26 @@ button:disabled {
 .action-buttons {
   display: flex;
   justify-content: space-between;
-  flex-direction: row-reverse;
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.action-primary {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid rgba(82, 82, 91, 0.4);
 }
 
-.action-primary {
-  display: flex;
-  gap: 12px;
-  align-items: center;
+.action-primary:has(.hidden:only-child),
+.action-primary:has(> .hidden:first-child:last-child),
+.action-primary:has(> button.hidden:nth-child(1)):has(> button.hidden:nth-child(2)) {
+  display: none;
 }
 
 .btn-primary {

@@ -12,6 +12,10 @@ const summaryEl = document.getElementById("summary");
 const showDebugLogs = document.getElementById("showDebugLogs");
 const logStream = document.getElementById("logStream");
 
+const statusPanel = document.getElementById("statusPanel");
+const logsPanel = document.getElementById("logsPanel");
+const resultsPanel = document.getElementById("resultsPanel");
+
 const tableBody = document.querySelector("#resultsTable tbody");
 const downloadCsv = document.getElementById("downloadCsv");
 const deployBtn = document.getElementById("deployBtn");
@@ -292,6 +296,11 @@ function resetView() {
   tableBody.innerHTML = "";
   downloadCsv.classList.add("hidden");
   deployBtn.classList.add("hidden");
+
+  statusPanel.classList.remove("hidden");
+  logsPanel.classList.remove("hidden");
+  resultsPanel.classList.remove("hidden");
+
   deployBtn.disabled = false;
   if (cancelDeployBtn) cancelDeployBtn.classList.add("hidden");
   if (deployCountdown) deployCountdown.classList.add("hidden");
@@ -376,6 +385,10 @@ function renderJob(job) {
 
 async function fetchJob() {
   if (!activeJobId) return;
+
+  statusPanel.classList.remove("hidden");
+  logsPanel.classList.remove("hidden");
+  resultsPanel.classList.remove("hidden");
 
   const response = await fetch(`/api/jobs/${activeJobId}`);
   if (!response.ok) {
