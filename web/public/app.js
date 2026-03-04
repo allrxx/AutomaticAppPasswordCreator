@@ -15,6 +15,7 @@ const logStream = document.getElementById("logStream");
 
 const tableBody = document.querySelector("#resultsTable tbody");
 const downloadCsv = document.getElementById("downloadCsv");
+const deployBtn = document.getElementById("deployBtn");
 
 const stageItems = Array.from(document.querySelectorAll(".stage-item"));
 const terminalStates = new Set(["completed", "completed_with_errors", "failed"]);
@@ -27,6 +28,7 @@ function formToPayload(formElement) {
   const data = new FormData(formElement);
   return {
     count: Number(data.get("count")),
+    deployment: String(data.get("deployment") || "dev").trim(),
   };
 }
 
@@ -323,6 +325,8 @@ function resetView() {
   summaryEl.innerHTML = "";
   tableBody.innerHTML = "";
   downloadCsv.classList.add("hidden");
+  deployBtn.classList.add("hidden");
+  deployBtn.disabled = false;
   activityFeed.innerHTML = '<li class="empty-state">Preparing workflow...</li>';
   logStream.textContent = "Waiting for server logs...";
 
@@ -346,7 +350,8 @@ function renderJob(job) {
   progressBar.style.width = `${progress.percent}%`;
   progressText.textContent = `${progress.percent}% complete${progress.detail ? ` • ${progress.detail}` : ""}`;
 
-  jobMeta.textContent = `Job: ${job.id} | Started: ${formatTime(job.startedAt || job.createdAt)} | Updated: ${formatTime(job.updatedAt)} | Finished: ${formatTime(job.finishedAt)}`;
+  const deploymentLabel = job.configPublic?.deployment ? ` | Deployment: ${job.configPublic.deployment}` : "";
+  jobMeta.textContent = `Job: ${job.id} | Started: ${formatTime(job.startedAt || job.createdAt)} | Updated: ${formatTime(job.updatedAt)} | Finished: ${formatTime(job.finishedAt)}${deploymentLabel}`;
 
   renderStageTrack(job.status, progress);
   renderActivity(job.logs || []);
@@ -359,6 +364,14 @@ function renderJob(job) {
     downloadCsv.classList.remove("hidden");
   } else {
     downloadCsv.classList.add("hidden");
+  }
+
+  // Show deploy button only if job is completed
+  if (terminalStates.has(job.status)) {
+    deployBtn.classList.remove("hidden");
+    deployBtn.disabled = false;
+  } else {
+    deployBtn.classList.add("hidden");
   }
 }
 
@@ -457,5 +470,64 @@ form.addEventListener("submit", async (event) => {
         <p class="log-message">${escapeHtml(error.message)}</p>
       </article>
     `;
+  }
+});
+deployBtn.addEventListener("click", async (event) => {
+  event.preventDefault();
+
+  if (!activeJobId) {
+    alert("No active job to deploy");
+    return;
+  }
+
+  deployBtn.disabled = true;
+  const originalText = deployBtn.textContent;
+  deployBtn.textContent = "Deploying...";
+
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}/deploy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || `Deployment failed (${response.status})`);
+    }
+
+    deployBtn.textContent = "Deployed ✓";
+    deployBtn.disabled = true;
+
+    // Add success activity log entry
+    const successEntry = `
+      <li class="activity-item info">
+        <div class="activity-head">
+          <span class="activity-time">${escapeHtml(formatClock(new Date().toISOString()))}</span>
+          <span class="activity-level">info</span>
+        </div>
+        <p class="activity-message">${escapeHtml(`Successfully deployed ${data.credentialsCount} credentials to ${data.deployment} backend`)}</p>
+      </li>
+    `;
+
+    const newHtml = successEntry + activityFeed.innerHTML;
+    activityFeed.innerHTML = newHtml;
+  } catch (error) {
+    deployBtn.disabled = false;
+    deployBtn.textContent = originalText;
+
+    // Add error activity log entry
+    const errorEntry = `
+      <li class="activity-item error">
+        <div class="activity-head">
+          <span class="activity-time">${escapeHtml(formatClock(new Date().toISOString()))}</span>
+          <span class="activity-level">error</span>
+        </div>
+        <p class="activity-message">${escapeHtml(`Deployment failed: ${error.message}`)}</p>
+      </li>
+    `;
+
+    const newHtml = errorEntry + activityFeed.innerHTML;
+    activityFeed.innerHTML = newHtml;
   }
 });

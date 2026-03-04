@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const fsPromises = require("fs/promises");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 const nodemailer = require("nodemailer");
 const { ImapFlow } = require("imapflow");
@@ -22,6 +23,18 @@ const WORKFLOW_STAGES = Object.freeze({
   appPassword: { key: "appPassword", label: "Generating app passwords", index: 2, total: 3 },
   validation: { key: "validation", label: "Validating delivery", index: 3, total: 3 },
 });
+
+const DEPLOY_CHOICE_MAP = Object.freeze({
+  prod: "1",
+  staging: "2",
+  dev: "3",
+  demo: "4",
+  cazelabs: "5",
+});
+
+const DB_MGMT_MOUNT = "/mnt/db-mgmt";
+const ENCRYPT_SCRIPT = path.join(DB_MGMT_MOUNT, "scripts", "encrypt_email_pool.sh");
+const TSV_INPUT_PATH = path.join(DB_MGMT_MOUNT, "tsv-files", "user_email_pool.tsv");
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -966,9 +979,14 @@ function buildRuntimeConfigFromEnv() {
 
 function validateAndBuildConfig(raw) {
   const runtimeConfig = buildRuntimeConfigFromEnv();
+  const deploymentOptions = ["prod", "staging", "dev", "demo", "cazelabs"];
+  const rawDeployment = String(raw.deployment || "dev").trim().toLowerCase();
+  const deployment = deploymentOptions.includes(rawDeployment) ? rawDeployment : "dev";
+
   const config = {
     ...runtimeConfig,
     count: toInteger(raw.count, 0),
+    deployment,
   };
 
   const errors = [];
@@ -1030,6 +1048,7 @@ app.post("/api/jobs", async (req, res) => {
     csvPath: null,
     configPublic: {
       count: config.count,
+      deployment: config.deployment,
       domain: config.domain,
       appName: config.appName,
       smtpHost: config.smtpHost,
@@ -1077,6 +1096,136 @@ app.get("/api/jobs/:jobId/csv", (req, res) => {
   }
 
   res.download(job.csvPath, `${job.id}-results.csv`);
+});
+
+app.post("/api/jobs/:jobId/deploy", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  if (!job.rows || job.rows.length === 0) {
+    return res.status(400).json({ error: "No workflow data available for deployment" });
+  }
+
+  // Resolve deployment choice for the encrypt script
+  const deployment = String(job.configPublic?.deployment || "dev").toLowerCase();
+  const envChoice = DEPLOY_CHOICE_MAP[deployment];
+  if (!envChoice) {
+    return res.status(400).json({ error: `Invalid deployment target: ${deployment}` });
+  }
+
+  // Verify the encrypt script is accessible via the volume mount
+  if (!fs.existsSync(ENCRYPT_SCRIPT)) {
+    console.error(`[api] Encrypt script not found at ${ENCRYPT_SCRIPT}`);
+    return res.status(500).json({
+      error: "Encrypt script not found. Verify the Docker volume mount for /mnt/db-mgmt is configured.",
+    });
+  }
+
+  // Verify EMAIL_POOL_DECRYPT_KEY_BASE64 is set
+  const decryptKey = process.env.EMAIL_POOL_DECRYPT_KEY_BASE64 || "";
+  if (!decryptKey) {
+    return res.status(500).json({
+      error: "EMAIL_POOL_DECRYPT_KEY_BASE64 is not set in the environment.",
+    });
+  }
+
+  // Filter to only include completed rows with app passwords
+  const successRows = job.rows.filter((row) => {
+    const hasAppPassword = row.app_password && String(row.app_password).trim() !== "";
+    const isSuccess = String(row.status || "").toUpperCase() === "SUCCESS";
+    const appPasswordGenerated = row.app_password_generated &&
+      ["1", "true", "yes", "y"].includes(String(row.app_password_generated || "").toLowerCase());
+    return hasAppPassword && (isSuccess || appPasswordGenerated);
+  });
+
+  if (successRows.length === 0) {
+    return res.status(400).json({ error: "No successfully generated app passwords available for deployment" });
+  }
+
+  // Build TSV data (no header — the script expects raw email\tapp_password lines)
+  const tsvLines = [];
+  for (const row of successRows) {
+    const email = String(row.email || "").replace(/\t/g, " ");
+    const appPassword = String(row.app_password || "").replace(/\t/g, " ");
+    tsvLines.push(`${email}\t${appPassword}`);
+  }
+  const tsvData = tsvLines.join("\n") + "\n";
+
+  try {
+    console.log(`[api] Deploying ${successRows.length} credentials via encrypt script | jobId=${job.id} | deployment=${deployment} | envChoice=${envChoice}`);
+
+    // Step 1: Write the TSV data to the mounted volume
+    const tsvDir = path.dirname(TSV_INPUT_PATH);
+    await fsPromises.mkdir(tsvDir, { recursive: true });
+    await fsPromises.writeFile(TSV_INPUT_PATH, tsvData, "utf8");
+    console.log(`[api] TSV written to ${TSV_INPUT_PATH} (${successRows.length} rows)`);
+
+    // Step 2: Execute the encrypt script non-interactively
+    const scriptResult = await new Promise((resolve) => {
+      let stdout = "";
+      let stderr = "";
+
+      const proc = spawn("bash", [ENCRYPT_SCRIPT], {
+        cwd: DB_MGMT_MOUNT,
+        env: {
+          ...process.env,
+          EMAIL_POOL_DECRYPT_KEY_BASE64: decryptKey,
+          PATH: process.env.PATH || "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 60_000,
+      });
+
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      // Feed the environment choice to the script's interactive prompt
+      proc.stdin.write(`${envChoice}\n`);
+      proc.stdin.end();
+
+      proc.on("close", (code) => {
+        resolve({ code, stdout, stderr });
+      });
+
+      proc.on("error", (err) => {
+        resolve({ code: -1, stdout, stderr: stderr + err.message });
+      });
+    });
+
+    console.log(`[api] Script exit code: ${scriptResult.code}`);
+    if (scriptResult.stdout) console.log(`[api] Script stdout:\n${scriptResult.stdout}`);
+    if (scriptResult.stderr) console.warn(`[api] Script stderr:\n${scriptResult.stderr}`);
+
+    if (scriptResult.code !== 0) {
+      return res.status(500).json({
+        error: "Encrypt script failed",
+        exitCode: scriptResult.code,
+        stdout: scriptResult.stdout,
+        stderr: scriptResult.stderr,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Credentials encrypted and deployed successfully",
+      credentialsCount: successRows.length,
+      deployment,
+      scriptOutput: scriptResult.stdout,
+    });
+  } catch (error) {
+    console.error(`[api] Deployment error | jobId=${job.id} | error=${error.message}`);
+    return res.status(500).json({
+      error: "Deployment failed",
+      details: error.message,
+    });
+  }
 });
 
 process.on("unhandledRejection", (reason) => {

@@ -12,5 +12,6 @@ services:
       PORT: 3000
     volumes:
       - ./web/output:/app/output
+      - ${DB_MGMT_REPO_PATH:-/home/azureuser/Hire-Sense-Backend-Team/repo-csv/db-mgmt}:/mnt/db-mgmt
     shm_size: "1gb"
     restart: unless-stopped

@@ -152,6 +152,46 @@ input[type="number"]:focus {
   border-color: transparent;
 }
 
+input[type="number"],
+select {
+  width: 180px;
+  border: 1px solid var(--border-main);
+  border-radius: var(--radius-sm);
+  background: rgba(39, 39, 42, 0.8);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 20px;
+  padding-right: 32px;
+}
+
+select:focus {
+  outline: 2px solid rgba(96, 165, 250, 0.45);
+  border-color: transparent;
+}
+
+.run-row-vertical {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.run-row-vertical > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 160px;
+}
+
 button {
   cursor: pointer;
   border: none;
@@ -348,6 +388,19 @@ button:disabled {
   width: fit-content;
   color: #bfdbfe;
   text-underline-offset: 3px;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.deploy-button {
+  width: fit-content;
+  padding: 8px 16px;
+  font-size: 0.95rem;
 }
 
 .content-grid {

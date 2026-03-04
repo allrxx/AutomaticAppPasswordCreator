@@ -25,9 +25,24 @@
       <section class="panel run-panel">
         <h2>Start New Run</h2>
         <form id="jobForm" class="run-form">
-          <label for="countInput">Number of emails to create</label>
+          <div class="run-row-vertical">
+            <div>
+              <label for="countInput">Number of emails to create</label>
+              <input id="countInput" name="count" type="number" min="1" value="5" required />
+            </div>
+            <div>
+              <label for="deploymentSelect">Target Deployment</label>
+              <select id="deploymentSelect" name="deployment" required>
+                <option value="">Select a deployment...</option>
+                <option value="prod">Production</option>
+                <option value="staging">Staging</option>
+                <option value="dev" selected>Development</option>
+                <option value="demo">Demo</option>
+                <option value="cazelabs">Caze Labs</option>
+              </select>
+            </div>
+          </div>
           <div class="run-row">
-            <input id="countInput" name="count" type="number" min="1" value="5" required />
             <button id="startBtn" type="submit">Run Workflow</button>
           </div>
           <p class="meta">
@@ -69,7 +84,10 @@
 
         <div id="summary" class="summary-grid"></div>
 
-        <a id="downloadCsv" href="#" class="hidden download-link">Download CSV Results</a>
+        <div class="action-buttons">
+          <a id="downloadCsv" href="#" class="hidden download-link">Download CSV Results</a>
+          <button id="deployBtn" class="hidden deploy-button">Deploy to Backend</button>
+        </div>
       </section>
 
       <section class="content-grid">
