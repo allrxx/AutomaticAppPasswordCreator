@@ -301,11 +301,10 @@ function renderTechnicalLogs(logs) {
             <span class="log-level ${escapeHtml(entry.level || "info")}">${escapeHtml(entry.level || "info")}</span>
           </div>
           <p class="log-message">${escapeHtml(entry.message || "")}</p>
-          ${
-            details
-              ? `<details><summary>Details</summary><pre>${escapeHtml(details)}</pre></details>`
-              : ""
-          }
+          ${details
+          ? `<details><summary>Details</summary><pre>${escapeHtml(details)}</pre></details>`
+          : ""
+        }
         </article>
       `;
     })
@@ -472,6 +471,29 @@ form.addEventListener("submit", async (event) => {
     `;
   }
 });
+function renderDeploySteps(steps) {
+  if (!steps || steps.length === 0) return "";
+  return steps
+    .map((step) => {
+      const icon = step.status === "success" ? "✅" : step.status === "failed" ? "❌" : "⏭";
+      const cls = step.status || "info";
+      const errorLine = step.error
+        ? `<p class="deploy-step-error">${escapeHtml(step.error)}</p>`
+        : "";
+      return `
+        <div class="deploy-step ${escapeHtml(cls)}">
+          <span class="deploy-step-icon">${icon}</span>
+          <div class="deploy-step-body">
+            <span class="deploy-step-name">${escapeHtml(step.name)}</span>
+            <span class="deploy-step-detail">${escapeHtml(step.detail || "")}</span>
+            ${errorLine}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 deployBtn.addEventListener("click", async (event) => {
   event.preventDefault();
 
@@ -484,50 +506,75 @@ deployBtn.addEventListener("click", async (event) => {
   const originalText = deployBtn.textContent;
   deployBtn.textContent = "Deploying...";
 
+  let data = null;
+  let failed = false;
+
   try {
     const response = await fetch(`/api/jobs/${activeJobId}/deploy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
 
-    const data = await response.json();
+    data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error || `Deployment failed (${response.status})`);
+      failed = true;
     }
+  } catch (error) {
+    data = { error: error.message, steps: [] };
+    failed = true;
+  }
 
+  const steps = data.steps || [];
+  const stepsHtml = renderDeploySteps(steps);
+  const now = escapeHtml(formatClock(new Date().toISOString()));
+  const overallSuccess = !failed;
+
+  // Build raw script output section if available
+  let rawOutputHtml = "";
+  const rawOutput = data.scriptOutput || data.stdout || "";
+  const rawErrors = data.stderr || "";
+  if (rawOutput || rawErrors) {
+    const combinedOutput = [rawOutput, rawErrors].filter(Boolean).join("\n---\n");
+    rawOutputHtml = `
+      <details class="deploy-output">
+        <summary>Raw script output</summary>
+        <pre>${escapeHtml(combinedOutput)}</pre>
+      </details>
+    `;
+  }
+
+  if (overallSuccess) {
     deployBtn.textContent = "Deployed ✓";
     deployBtn.disabled = true;
 
-    // Add success activity log entry
-    const successEntry = `
+    const entry = `
       <li class="activity-item info">
         <div class="activity-head">
-          <span class="activity-time">${escapeHtml(formatClock(new Date().toISOString()))}</span>
+          <span class="activity-time">${now}</span>
           <span class="activity-level">info</span>
         </div>
-        <p class="activity-message">${escapeHtml(`Successfully deployed ${data.credentialsCount} credentials to ${data.deployment} backend`)}</p>
+        <p class="activity-message">Successfully deployed ${escapeHtml(String(data.credentialsCount || 0))} credentials to ${escapeHtml(data.deployment || "unknown")} backend</p>
+        <div class="deploy-log">${stepsHtml}</div>
+        ${rawOutputHtml}
       </li>
     `;
-
-    const newHtml = successEntry + activityFeed.innerHTML;
-    activityFeed.innerHTML = newHtml;
-  } catch (error) {
+    activityFeed.innerHTML = entry + activityFeed.innerHTML;
+  } else {
     deployBtn.disabled = false;
     deployBtn.textContent = originalText;
 
-    // Add error activity log entry
-    const errorEntry = `
+    const entry = `
       <li class="activity-item error">
         <div class="activity-head">
-          <span class="activity-time">${escapeHtml(formatClock(new Date().toISOString()))}</span>
+          <span class="activity-time">${now}</span>
           <span class="activity-level">error</span>
         </div>
-        <p class="activity-message">${escapeHtml(`Deployment failed: ${error.message}`)}</p>
+        <p class="activity-message">Deployment failed: ${escapeHtml(data.error || "Unknown error")}</p>
+        <div class="deploy-log">${stepsHtml}</div>
+        ${rawOutputHtml}
       </li>
     `;
-
-    const newHtml = errorEntry + activityFeed.innerHTML;
-    activityFeed.innerHTML = newHtml;
+    activityFeed.innerHTML = entry + activityFeed.innerHTML;
   }
 });

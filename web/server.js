@@ -34,7 +34,7 @@ const DEPLOY_CHOICE_MAP = Object.freeze({
 
 const DB_MGMT_MOUNT = "/mnt/db-mgmt";
 const ENCRYPT_SCRIPT = path.join(DB_MGMT_MOUNT, "scripts", "encrypt_email_pool.sh");
-const TSV_INPUT_PATH = path.join(DB_MGMT_MOUNT, "tsv-files", "user_email_pool.tsv");
+const TSV_INPUT_PATH = path.join(DB_MGMT_MOUNT, "scripts", "user_email_pool.tsv");
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -440,7 +440,7 @@ async function configureAppPasswordProtocols(page) {
 }
 
 async function createAppPasswordInWebmail(config, row, appPassword, browser, trace) {
-  const logTrace = typeof trace === "function" ? trace : () => {};
+  const logTrace = typeof trace === "function" ? trace : () => { };
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: { width: 1366, height: 900 },
@@ -461,7 +461,7 @@ async function createAppPasswordInWebmail(config, row, appPassword, browser, tra
 
     currentStep = "wait-post-login";
     await page.waitForTimeout(1_300);
-    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => { });
 
     currentStep = "verify-login-state";
     const loginFieldVisible = await page
@@ -477,7 +477,7 @@ async function createAppPasswordInWebmail(config, row, appPassword, browser, tra
     currentStep = "open-user-page";
     logTrace("Opening user settings page");
     await page.goto(`${config.webmailUrl}/user`, { timeout: 60_000 });
-    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => { });
 
     currentStep = "open-app-password-tab";
     const tabButton = page.locator('button[data-bs-target="#AppPasswds"]').first();
@@ -529,7 +529,7 @@ async function createAppPasswordInWebmail(config, row, appPassword, browser, tra
 }
 
 async function sendSmtpValidation(config, row, subject, targetEmail, trace) {
-  const logTrace = typeof trace === "function" ? trace : () => {};
+  const logTrace = typeof trace === "function" ? trace : () => { };
   const secureConnection = Number(config.smtpPort) === 465;
   logTrace("Creating SMTP transport", {
     host: config.smtpHost,
@@ -570,7 +570,7 @@ async function sendSmtpValidation(config, row, subject, targetEmail, trace) {
 }
 
 async function getReceiverSubjects(config, sinceDate, trace) {
-  const logTrace = typeof trace === "function" ? trace : () => {};
+  const logTrace = typeof trace === "function" ? trace : () => { };
   const client = new ImapFlow({
     host: config.imapHost,
     port: Number(config.imapPort),
@@ -611,7 +611,7 @@ async function getReceiverSubjects(config, sinceDate, trace) {
     }
   } finally {
     logTrace("Logging out from IMAP");
-    await client.logout().catch(() => {});
+    await client.logout().catch(() => { });
   }
 
   return subjects;
@@ -1104,34 +1104,35 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
     return res.status(404).json({ error: "Job not found" });
   }
 
+  const steps = [];
+  const addStep = (name, status, detail = "", error = "") => {
+    steps.push({ name, status, detail, error });
+  };
+
+  // --- Step 1: Validate job data ---
   if (!job.rows || job.rows.length === 0) {
-    return res.status(400).json({ error: "No workflow data available for deployment" });
+    addStep("Validate job data", "failed", "No workflow data available", "Job has no rows to deploy");
+    return res.status(400).json({ error: "No workflow data available for deployment", steps });
   }
 
-  // Resolve deployment choice for the encrypt script
   const deployment = String(job.configPublic?.deployment || "dev").toLowerCase();
   const envChoice = DEPLOY_CHOICE_MAP[deployment];
   if (!envChoice) {
-    return res.status(400).json({ error: `Invalid deployment target: ${deployment}` });
+    addStep("Validate job data", "failed", `Invalid deployment target: ${deployment}`, `Unknown deployment "${deployment}"`);
+    return res.status(400).json({ error: `Invalid deployment target: ${deployment}`, steps });
   }
 
-  // Verify the encrypt script is accessible via the volume mount
   if (!fs.existsSync(ENCRYPT_SCRIPT)) {
-    console.error(`[api] Encrypt script not found at ${ENCRYPT_SCRIPT}`);
-    return res.status(500).json({
-      error: "Encrypt script not found. Verify the Docker volume mount for /mnt/db-mgmt is configured.",
-    });
+    addStep("Validate job data", "failed", "Encrypt script not found", `Script not found at ${ENCRYPT_SCRIPT}. Check Docker volume mount.`);
+    return res.status(500).json({ error: "Encrypt script not found. Verify the Docker volume mount for /mnt/db-mgmt is configured.", steps });
   }
 
-  // Verify EMAIL_POOL_DECRYPT_KEY_BASE64 is set
   const decryptKey = process.env.EMAIL_POOL_DECRYPT_KEY_BASE64 || "";
   if (!decryptKey) {
-    return res.status(500).json({
-      error: "EMAIL_POOL_DECRYPT_KEY_BASE64 is not set in the environment.",
-    });
+    addStep("Validate job data", "failed", "Decrypt key missing", "EMAIL_POOL_DECRYPT_KEY_BASE64 is not set in the environment.");
+    return res.status(500).json({ error: "EMAIL_POOL_DECRYPT_KEY_BASE64 is not set in the environment.", steps });
   }
 
-  // Filter to only include completed rows with app passwords
   const successRows = job.rows.filter((row) => {
     const hasAppPassword = row.app_password && String(row.app_password).trim() !== "";
     const isSuccess = String(row.status || "").toUpperCase() === "SUCCESS";
@@ -1141,10 +1142,13 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
   });
 
   if (successRows.length === 0) {
-    return res.status(400).json({ error: "No successfully generated app passwords available for deployment" });
+    addStep("Validate job data", "failed", "No eligible credentials", "No successfully generated app passwords available for deployment");
+    return res.status(400).json({ error: "No successfully generated app passwords available for deployment", steps });
   }
 
-  // Build TSV data (no header — the script expects raw email\tapp_password lines)
+  addStep("Validate job data", "success", `${successRows.length} credential(s) eligible for ${deployment} deployment`);
+
+  // --- Step 2: Build and write TSV file ---
   const tsvLines = [];
   for (const row of successRows) {
     const email = String(row.email || "").replace(/\t/g, " ");
@@ -1154,15 +1158,20 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
   const tsvData = tsvLines.join("\n") + "\n";
 
   try {
-    console.log(`[api] Deploying ${successRows.length} credentials via encrypt script | jobId=${job.id} | deployment=${deployment} | envChoice=${envChoice}`);
-
-    // Step 1: Write the TSV data to the mounted volume
     const tsvDir = path.dirname(TSV_INPUT_PATH);
     await fsPromises.mkdir(tsvDir, { recursive: true });
     await fsPromises.writeFile(TSV_INPUT_PATH, tsvData, "utf8");
-    console.log(`[api] TSV written to ${TSV_INPUT_PATH} (${successRows.length} rows)`);
+    addStep("Write TSV file", "success", `Wrote ${successRows.length} row(s) to ${path.basename(TSV_INPUT_PATH)}`);
+  } catch (tsvError) {
+    addStep("Write TSV file", "failed", "Could not write credentials file", tsvError.message);
+    console.error(`[api] TSV write error | jobId=${job.id} | error=${tsvError.message}`);
+    return res.status(500).json({ error: "Failed to write TSV file", steps });
+  }
 
-    // Step 2: Execute the encrypt script non-interactively
+  // --- Step 3: Execute encrypt script ---
+  console.log(`[api] Deploying ${successRows.length} credentials via encrypt script | jobId=${job.id} | deployment=${deployment} | envChoice=${envChoice}`);
+
+  try {
     const scriptResult = await new Promise((resolve) => {
       let stdout = "";
       let stderr = "";
@@ -1186,7 +1195,6 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
         stderr += chunk.toString();
       });
 
-      // Feed the environment choice to the script's interactive prompt
       proc.stdin.write(`${envChoice}\n`);
       proc.stdin.end();
 
@@ -1204,12 +1212,36 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
     if (scriptResult.stderr) console.warn(`[api] Script stderr:\n${scriptResult.stderr}`);
 
     if (scriptResult.code !== 0) {
+      addStep("Execute encrypt script", "failed", `Exit code: ${scriptResult.code}`, scriptResult.stderr || scriptResult.stdout || "Script exited with non-zero code");
       return res.status(500).json({
         error: "Encrypt script failed",
         exitCode: scriptResult.code,
         stdout: scriptResult.stdout,
         stderr: scriptResult.stderr,
+        steps,
       });
+    }
+
+    addStep("Execute encrypt script", "success", "Script completed successfully");
+
+    // --- Step 4: Parse script output for sub-steps ---
+    const outputLines = (scriptResult.stdout || "").split("\n").filter((l) => l.trim());
+    for (const line of outputLines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // Detect common meaningful lines from the shell script output
+      if (/encrypt/i.test(trimmed)) {
+        addStep("Encrypt email pool", "success", trimmed);
+      } else if (/git\s+(add|stage)/i.test(trimmed)) {
+        addStep("Git stage changes", "success", trimmed);
+      } else if (/git\s+commit/i.test(trimmed)) {
+        addStep("Git commit", "success", trimmed);
+      } else if (/git\s+push/i.test(trimmed)) {
+        addStep("Git push", "success", trimmed);
+      } else if (/done|complete|success|finished/i.test(trimmed)) {
+        addStep("Finalization", "success", trimmed);
+      }
     }
 
     return res.json({
@@ -1218,12 +1250,15 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
       credentialsCount: successRows.length,
       deployment,
       scriptOutput: scriptResult.stdout,
+      steps,
     });
   } catch (error) {
+    addStep("Execute encrypt script", "failed", "Unexpected error", error.message);
     console.error(`[api] Deployment error | jobId=${job.id} | error=${error.message}`);
     return res.status(500).json({
       error: "Deployment failed",
       details: error.message,
+      steps,
     });
   }
 });
