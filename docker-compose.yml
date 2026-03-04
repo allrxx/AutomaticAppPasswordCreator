@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: automatic-app-password-creator
+    ports:
+      - "3000:3000"
+    env_file:
+      - web/.env
+    environment:
+      PORT: 3000
+    volumes:
+      - ./web/output:/app/output
+    shm_size: "1gb"
+    restart: unless-stopped

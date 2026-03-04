@@ -40,6 +40,31 @@ npm start
 
 Open: `http://localhost:3000`
 
+## Docker Run
+
+### 1) Prepare env file
+```powershell
+cd web
+copy .env.example .env
+```
+
+Fill required values in `web/.env` (at least `MAILCOW_API_KEY`).
+
+### 2) Build and start
+```powershell
+docker compose up -d --build
+```
+
+### 3) View logs
+```powershell
+docker compose logs -f app
+```
+
+### 4) Stop
+```powershell
+docker compose down
+```
+
 ## UI
 
 User input is intentionally minimal:

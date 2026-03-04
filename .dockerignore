@@ -1,0 +1,11 @@
+.git
+.gitignore
+.vscode
+README.md
+
+web/node_modules
+web/output
+web/.env
+web/.env.*
+
+**/*.log
