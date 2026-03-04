@@ -10,10 +10,10 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="bg-shape bg-shape-a"></div>
-    <div class="bg-shape bg-shape-b"></div>
+    <div class="bg-glow bg-glow-a"></div>
+    <div class="bg-glow bg-glow-b"></div>
 
-    <main class="container">
+    <main class="container" role="main">
       <header class="hero">
         <p class="eyebrow">AutomaticAppPasswordCreator</p>
         <h1>Mailbox + App Password + Validation Workflow</h1>
@@ -22,48 +22,74 @@
         </p>
       </header>
 
-      <section class="panel">
-        <form id="jobForm" class="form-grid">
-          <h2>Start New Run</h2>
-
-          <label>
-            Number of emails to create
-            <input name="count" type="number" min="1" value="5" required />
-          </label>
-
-          <p class="meta helper">
+      <section class="panel run-panel">
+        <h2>Start New Run</h2>
+        <form id="jobForm" class="run-form">
+          <label for="countInput">Number of emails to create</label>
+          <div class="run-row">
+            <input id="countInput" name="count" type="number" min="1" value="5" required />
+            <button id="startBtn" type="submit">Run Workflow</button>
+          </div>
+          <p class="meta">
             All other settings are preconfigured on the server from environment variables.
           </p>
-
-          <div class="actions">
-            <button id="startBtn" type="submit">Start Workflow</button>
-          </div>
         </form>
       </section>
 
       <section class="panel status-panel">
-        <div class="status-head">
-          <h2>Run Status</h2>
+        <div class="status-top">
+          <div>
+            <p class="status-kicker">Run Status</p>
+            <h2 id="stageTitle">Waiting to start</h2>
+            <p id="stageText" class="meta">Stage 0/3</p>
+          </div>
           <span id="jobBadge" class="badge idle">Idle</span>
         </div>
 
-        <p id="jobMeta" class="meta">No job started yet.</p>
+        <ol class="stage-track" id="stageTrack">
+          <li class="stage-item" data-stage="1">
+            <span>1</span>
+            Create Mailboxes
+          </li>
+          <li class="stage-item" data-stage="2">
+            <span>2</span>
+            Generate App Passwords
+          </li>
+          <li class="stage-item" data-stage="3">
+            <span>3</span>
+            Validate Delivery
+          </li>
+        </ol>
 
         <div class="progress-wrap">
           <div id="progressBar" class="progress-bar"></div>
         </div>
-        <p id="progressText" class="meta">Progress: 0%</p>
+        <p id="progressText" class="meta">0% complete</p>
+        <p id="jobMeta" class="meta">No job started yet.</p>
 
-        <div id="summary"></div>
+        <div id="summary" class="summary-grid"></div>
 
-        <div class="download-row">
-          <a id="downloadCsv" href="#" class="hidden">Download CSV Results</a>
-        </div>
+        <a id="downloadCsv" href="#" class="hidden download-link">Download CSV Results</a>
       </section>
 
-      <section class="panel logs-panel">
-        <h2>Logs</h2>
-        <pre id="logs">No logs yet.</pre>
+      <section class="content-grid">
+        <section class="panel activity-panel">
+          <h2>Activity Feed</h2>
+          <p class="meta">Human-friendly updates to track progress without noise.</p>
+          <ul id="activityFeed" class="activity-feed">
+            <li class="empty-state">No activity yet.</li>
+          </ul>
+        </section>
+
+        <section class="panel logs-panel">
+          <h2>Technical Logs</h2>
+          <p class="meta">Detailed logs for troubleshooting and crash analysis.</p>
+          <label class="toggle-line" for="showDebugLogs">
+            <input id="showDebugLogs" type="checkbox" />
+            Show debug entries
+          </label>
+          <div id="logStream" class="log-stream">No technical logs yet.</div>
+        </section>
       </section>
 
       <section class="panel table-panel">

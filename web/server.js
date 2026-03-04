@@ -17,6 +17,11 @@ const OUTPUT_DIR = path.join(__dirname, "output");
 const jobs = new Map();
 const MAX_LOG_LINES = 5000;
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
+const WORKFLOW_STAGES = Object.freeze({
+  mailbox: { key: "mailbox", label: "Creating mailboxes", index: 1, total: 3 },
+  appPassword: { key: "appPassword", label: "Generating app passwords", index: 2, total: 3 },
+  validation: { key: "validation", label: "Validating delivery", index: 3, total: 3 },
+});
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -76,12 +81,54 @@ function addLog(job, level, message, details) {
   console.log(line);
 }
 
-function setProgress(job, phase, completed, total) {
+function getStage(stageKey) {
+  return WORKFLOW_STAGES[stageKey] || WORKFLOW_STAGES.mailbox;
+}
+
+function buildQueuedProgress() {
+  return {
+    stageKey: "queued",
+    stageLabel: "Queued",
+    stageCurrent: 0,
+    stageTotal: WORKFLOW_STAGES.validation.total,
+    detail: "Waiting for worker",
+    completed: 0,
+    total: 0,
+    stagePercent: 0,
+    percent: 0,
+    phase: "Queued",
+  };
+}
+
+function setProgress(job, stageKey, completed, total, detail = "") {
+  const stage = getStage(stageKey);
+  const safeCompleted = Math.max(0, Number(completed) || 0);
+  const safeTotal = Math.max(0, Number(total) || 0);
+  const stageRatio = safeTotal > 0 ? Math.min(1, safeCompleted / safeTotal) : 1;
+  const overallRatio = ((stage.index - 1) + stageRatio) / stage.total;
+
   job.progress = {
-    phase,
-    completed,
-    total,
-    percent: total > 0 ? Math.round((completed / total) * 100) : 0,
+    stageKey: stage.key,
+    stageLabel: stage.label,
+    stageCurrent: stage.index,
+    stageTotal: stage.total,
+    detail: detail || "",
+    completed: safeCompleted,
+    total: safeTotal,
+    stagePercent: Math.round(stageRatio * 100),
+    percent: Math.round(overallRatio * 100),
+    phase: stage.label,
+  };
+  job.updatedAt = nowIso();
+}
+
+function setFailedProgress(job, detail) {
+  const existing = job.progress || buildQueuedProgress();
+  job.progress = {
+    ...existing,
+    detail: detail || existing.detail || "Workflow failed",
+    phase: "Failed",
+    failed: true,
   };
   job.updatedAt = nowIso();
 }
@@ -599,7 +646,7 @@ async function runWorkflow(job, config) {
   addLog(job, "info", `Generated ${rows.length} mailbox records`);
 
   const mailboxPhaseStart = logStepStart(job, "phase:create-mailboxes", { totalRows: rows.length });
-  setProgress(job, "Creating mailboxes", 0, rows.length);
+  setProgress(job, "mailbox", 0, rows.length, "Preparing mailbox creation");
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
     const rowCreateStart = logStepStart(job, "mailbox-create-row", {
@@ -632,7 +679,7 @@ async function runWorkflow(job, config) {
       });
     }
 
-    setProgress(job, "Creating mailboxes", i + 1, rows.length);
+    setProgress(job, "mailbox", i + 1, rows.length, `Created ${i + 1} of ${rows.length} mailboxes`);
     await wait(120);
   }
   logStepSuccess(job, "phase:create-mailboxes", mailboxPhaseStart, {
@@ -654,7 +701,7 @@ async function runWorkflow(job, config) {
     logStepSuccess(job, "playwright-launch-browser", browserLaunchStart);
 
     try {
-      setProgress(job, "Generating app passwords", 0, rowsReadyForAppPassword.length);
+      setProgress(job, "appPassword", 0, rowsReadyForAppPassword.length, "Opening webmail automation");
 
       for (let i = 0; i < rowsReadyForAppPassword.length; i += 1) {
         const row = rowsReadyForAppPassword[i];
@@ -691,7 +738,13 @@ async function runWorkflow(job, config) {
           });
         }
 
-        setProgress(job, "Generating app passwords", i + 1, rowsReadyForAppPassword.length);
+        setProgress(
+          job,
+          "appPassword",
+          i + 1,
+          rowsReadyForAppPassword.length,
+          `Generated ${i + 1} of ${rowsReadyForAppPassword.length} app passwords`
+        );
       }
     } finally {
       const browserCloseStart = logStepStart(job, "playwright-close-browser");
@@ -704,11 +757,14 @@ async function runWorkflow(job, config) {
       });
     }
   } else {
+    setProgress(job, "appPassword", 0, 0, "Skipped: no mailbox available for app password generation");
     addLog(job, "warn", "No mailboxes qualified for app password generation");
   }
 
   const rowsReadyForSmtp = rows.filter((r) => r.app_password_generated);
   addLog(job, "info", `${rowsReadyForSmtp.length} mailbox(es) eligible for SMTP validation`);
+  const requiresImap = Boolean(config.receiverPassword && config.receiverEmail);
+
   if (!config.receiverEmail) {
     addLog(
       job,
@@ -722,7 +778,8 @@ async function runWorkflow(job, config) {
     host: config.smtpHost,
     port: config.smtpPort,
   });
-  setProgress(job, "SMTP validation", 0, rowsReadyForSmtp.length);
+  const validationTotalUnits = requiresImap ? rowsReadyForSmtp.length * 2 : rowsReadyForSmtp.length;
+  setProgress(job, "validation", 0, validationTotalUnits, "Preparing SMTP validation");
   const smtpStartDate = new Date();
 
   for (let i = 0; i < rowsReadyForSmtp.length; i += 1) {
@@ -758,7 +815,13 @@ async function runWorkflow(job, config) {
       });
     }
 
-    setProgress(job, "SMTP validation", i + 1, rowsReadyForSmtp.length);
+    setProgress(
+      job,
+      "validation",
+      i + 1,
+      validationTotalUnits,
+      `SMTP validated ${i + 1} of ${rowsReadyForSmtp.length} accounts`
+    );
     await wait(150);
   }
   logStepSuccess(job, "phase:smtp-validation", smtpPhaseStart, {
@@ -766,8 +829,6 @@ async function runWorkflow(job, config) {
     sent: rows.filter((r) => r.smtp_sent).length,
     failed: rows.filter((r) => r.app_password_generated && !r.smtp_sent).length,
   });
-
-  const requiresImap = Boolean(config.receiverPassword && config.receiverEmail);
 
   if (requiresImap) {
     const imapPhaseStart = logStepStart(job, "phase:imap-verification", {
@@ -779,7 +840,13 @@ async function runWorkflow(job, config) {
     await wait(20_000);
 
     const smtpSubjects = new Set(rowsReadyForSmtp.filter((r) => r.smtp_sent).map((r) => r.smtp_subject));
-    setProgress(job, "IMAP verification", 0, smtpSubjects.size);
+    setProgress(
+      job,
+      "validation",
+      rowsReadyForSmtp.length,
+      validationTotalUnits,
+      "Waiting for IMAP verification window"
+    );
     addLog(job, "debug", "Prepared IMAP subject correlation set", {
       subjectCount: smtpSubjects.size,
     });
@@ -789,9 +856,18 @@ async function runWorkflow(job, config) {
         addLog(job, "debug", `IMAP :: ${message}`, details);
       });
       let verifiedCount = 0;
+      let processedCount = 0;
 
       for (const row of rowsReadyForSmtp) {
         if (!row.smtp_sent) {
+          processedCount += 1;
+          setProgress(
+            job,
+            "validation",
+            rowsReadyForSmtp.length + processedCount,
+            validationTotalUnits,
+            `IMAP verified ${verifiedCount} of ${rowsReadyForSmtp.length} accounts`
+          );
           continue;
         }
 
@@ -805,7 +881,14 @@ async function runWorkflow(job, config) {
           addLog(job, "warn", `IMAP could not verify ${row.email}`, { subject: row.smtp_subject });
         }
 
-        setProgress(job, "IMAP verification", verifiedCount, smtpSubjects.size);
+        processedCount += 1;
+        setProgress(
+          job,
+          "validation",
+          rowsReadyForSmtp.length + processedCount,
+          validationTotalUnits,
+          `IMAP verified ${verifiedCount} of ${rowsReadyForSmtp.length} accounts`
+        );
       }
 
       addLog(job, "info", `IMAP verification complete: ${verifiedCount}/${smtpSubjects.size}`);
@@ -825,6 +908,7 @@ async function runWorkflow(job, config) {
       }
     }
   } else {
+    setProgress(job, "validation", rowsReadyForSmtp.length, rowsReadyForSmtp.length, "IMAP skipped (not configured)");
     addLog(job, "warn", "Receiver app password not provided. IMAP verification skipped.");
   }
 
@@ -843,7 +927,7 @@ async function runWorkflow(job, config) {
   job.status = job.summary.failed > 0 ? "completed_with_errors" : "completed";
   job.finishedAt = nowIso();
   job.updatedAt = nowIso();
-  setProgress(job, "Completed", 1, 1);
+  setProgress(job, "validation", 1, 1, "Workflow completed");
   logStepSuccess(job, "phase:finalization", finalizationStart);
 
   addLog(
@@ -938,7 +1022,7 @@ app.post("/api/jobs", async (req, res) => {
     updatedAt: nowIso(),
     startedAt: null,
     finishedAt: null,
-    progress: { phase: "Queued", completed: 0, total: 1, percent: 0 },
+    progress: buildQueuedProgress(),
     logs: [],
     rows: [],
     summary: null,
@@ -967,7 +1051,7 @@ app.post("/api/jobs", async (req, res) => {
     job.error = error.message || "Unexpected workflow error";
     job.finishedAt = nowIso();
     job.updatedAt = nowIso();
-    setProgress(job, "Failed", 1, 1);
+    setFailedProgress(job, "Workflow failed");
     addLog(job, "error", `Workflow failed: ${job.error}`, {
       error: serializeError(error),
     });
