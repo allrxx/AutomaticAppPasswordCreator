@@ -334,10 +334,11 @@ function summarize(job) {
   };
 }
 
-function updateRowStatus(row, requireImapVerification) {
+function updateRowStatus(row, requireImapVerification, requireSmtpVerification) {
   const imapRequirementSatisfied = requireImapVerification ? row.imap_verified === true : true;
-  const baseSuccess = row.mailbox_created && row.app_password_generated && row.smtp_sent;
-  row.status = baseSuccess && imapRequirementSatisfied ? "SUCCESS" : "FAILED";
+  const smtpRequirementSatisfied = requireSmtpVerification ? row.smtp_sent === true : true;
+  const baseSuccess = row.mailbox_created && row.app_password_generated;
+  row.status = baseSuccess && smtpRequirementSatisfied && imapRequirementSatisfied ? "SUCCESS" : "FAILED";
 }
 
 function appendRowError(row, text) {
@@ -776,9 +777,14 @@ async function runWorkflow(job, config) {
 
   const rowsReadyForSmtp = rows.filter((r) => r.app_password_generated);
   addLog(job, "info", `${rowsReadyForSmtp.length} mailbox(es) eligible for SMTP validation`);
-  const requiresImap = Boolean(config.receiverPassword && config.receiverEmail);
 
-  if (!config.receiverEmail) {
+  // Imap requires SMTP to have been sent. If SMTP is disabled, IMAP must also be disabled.
+  const requiresSmtp = !config.disableSmtpCheck;
+  const requiresImap = requiresSmtp && !config.disableImapCheck && Boolean(config.receiverPassword && config.receiverEmail);
+
+  if (!requiresSmtp) {
+    addLog(job, "warn", "SMTP validation is globally disabled via DISABLE_SMTP_CHECK flag");
+  } else if (!config.receiverEmail) {
     addLog(
       job,
       "warn",
@@ -791,57 +797,65 @@ async function runWorkflow(job, config) {
     host: config.smtpHost,
     port: config.smtpPort,
   });
-  const validationTotalUnits = requiresImap ? rowsReadyForSmtp.length * 2 : rowsReadyForSmtp.length;
-  setProgress(job, "validation", 0, validationTotalUnits, "Preparing SMTP validation");
+  let validationTotalUnits = 0;
+  if (requiresSmtp) validationTotalUnits += rowsReadyForSmtp.length;
+  if (requiresImap) validationTotalUnits += rowsReadyForSmtp.length;
+
+  setProgress(job, "validation", 0, validationTotalUnits || 1, "Preparing SMTP validation");
   const smtpStartDate = new Date();
 
-  for (let i = 0; i < rowsReadyForSmtp.length; i += 1) {
-    const row = rowsReadyForSmtp[i];
-    const subject = `SMTP Check ${job.id}-${i + 1}-${crypto.randomBytes(3).toString("hex")}`;
-    const targetEmail = config.receiverEmail || row.email;
-    const smtpRowStart = logStepStart(job, "smtp-row", {
-      index: i + 1,
-      total: rowsReadyForSmtp.length,
-      email: row.email,
-      subject,
-      targetEmail,
-    });
-
-    try {
-      await sendSmtpValidation(config, row, subject, targetEmail, (message, details) => {
-        addLog(job, "debug", `[${i + 1}/${rowsReadyForSmtp.length}] ${row.email} :: ${message}`, details);
-      });
-      row.smtp_sent = true;
-      row.smtp_subject = subject;
-      addLog(job, "info", `[${i + 1}/${rowsReadyForSmtp.length}] SMTP sent: ${row.email} -> ${targetEmail}`);
-      logStepSuccess(job, "smtp-row", smtpRowStart, {
+  if (requiresSmtp) {
+    for (let i = 0; i < rowsReadyForSmtp.length; i += 1) {
+      const row = rowsReadyForSmtp[i];
+      const subject = `SMTP Check ${job.id}-${i + 1}-${crypto.randomBytes(3).toString("hex")}`;
+      const targetEmail = config.receiverEmail || row.email;
+      const smtpRowStart = logStepStart(job, "smtp-row", {
         index: i + 1,
+        total: rowsReadyForSmtp.length,
         email: row.email,
+        subject,
         targetEmail,
       });
-    } catch (error) {
-      appendRowError(row, `SMTP send failed: ${error.message || "Unknown SMTP error"}`);
-      addLog(job, "error", `[${i + 1}/${rowsReadyForSmtp.length}] SMTP failed: ${row.email} (${error.message})`);
-      logStepFailure(job, "smtp-row", smtpRowStart, error, {
-        index: i + 1,
-        email: row.email,
-      });
-    }
 
-    setProgress(
-      job,
-      "validation",
-      i + 1,
-      validationTotalUnits,
-      `SMTP validated ${i + 1} of ${rowsReadyForSmtp.length} accounts`
-    );
-    await wait(150);
+      try {
+        await sendSmtpValidation(config, row, subject, targetEmail, (message, details) => {
+          addLog(job, "debug", `[${i + 1}/${rowsReadyForSmtp.length}] ${row.email} :: ${message}`, details);
+        });
+        row.smtp_sent = true;
+        row.smtp_subject = subject;
+        addLog(job, "info", `[${i + 1}/${rowsReadyForSmtp.length}] SMTP sent: ${row.email} -> ${targetEmail}`);
+        logStepSuccess(job, "smtp-row", smtpRowStart, {
+          index: i + 1,
+          email: row.email,
+          targetEmail,
+        });
+      } catch (error) {
+        appendRowError(row, `SMTP send failed: ${error.message || "Unknown SMTP error"}`);
+        addLog(job, "error", `[${i + 1}/${rowsReadyForSmtp.length}] SMTP failed: ${row.email} (${error.message})`);
+        logStepFailure(job, "smtp-row", smtpRowStart, error, {
+          index: i + 1,
+          email: row.email,
+        });
+      }
+
+      setProgress(
+        job,
+        "validation",
+        i + 1,
+        validationTotalUnits,
+        `SMTP validated ${i + 1} of ${rowsReadyForSmtp.length} accounts`
+      );
+      await wait(150);
+    }
+    logStepSuccess(job, "phase:smtp-validation", smtpPhaseStart, {
+      attempted: rowsReadyForSmtp.length,
+      sent: rows.filter((r) => r.smtp_sent).length,
+      failed: rows.filter((r) => r.app_password_generated && !r.smtp_sent).length,
+    });
+  } else {
+    logStepSuccess(job, "phase:smtp-validation", smtpPhaseStart, { skipped: true });
+    setProgress(job, "validation", 0, validationTotalUnits || 1, "SMTP skipped (disabled via flag)");
   }
-  logStepSuccess(job, "phase:smtp-validation", smtpPhaseStart, {
-    attempted: rowsReadyForSmtp.length,
-    sent: rows.filter((r) => r.smtp_sent).length,
-    failed: rows.filter((r) => r.app_password_generated && !r.smtp_sent).length,
-  });
 
   if (requiresImap) {
     const imapPhaseStart = logStepStart(job, "phase:imap-verification", {
@@ -921,13 +935,29 @@ async function runWorkflow(job, config) {
       }
     }
   } else {
-    setProgress(job, "validation", rowsReadyForSmtp.length, rowsReadyForSmtp.length, "IMAP skipped (not configured)");
-    addLog(job, "warn", "Receiver app password not provided. IMAP verification skipped.");
+    // Determine reason for skip
+    let skipReason = "not configured";
+    if (config.disableImapCheck) skipReason = "disabled via flag";
+    if (!requiresSmtp) skipReason = "SMTP validation disabled";
+
+    // Only set progress if IMAP was supposedly part of the expected total or if we skipped both
+    if (validationTotalUnits === 0) {
+      setProgress(job, "validation", 1, 1, `Validation skipped (${skipReason})`);
+    } else if (requiresSmtp) {
+      setProgress(job, "validation", rowsReadyForSmtp.length, validationTotalUnits, `IMAP skipped (${skipReason})`);
+    }
+
+    // If receiverPassword is empty it's fine, warn otherwise
+    if (config.disableImapCheck) {
+      addLog(job, "warn", "IMAP verification globally disabled via DISABLE_IMAP_CHECK flag.");
+    } else if (!config.receiverPassword) {
+      addLog(job, "warn", "Receiver app password not provided. IMAP verification skipped.");
+    }
   }
 
   const finalizationStart = logStepStart(job, "phase:finalization");
   for (const row of rows) {
-    updateRowStatus(row, requiresImap);
+    updateRowStatus(row, requiresImap, requiresSmtp);
   }
 
   job.summary = summarize(job);
@@ -974,6 +1004,8 @@ function buildRuntimeConfigFromEnv() {
     receiverPassword: envString("VALIDATION_RECEIVER_APP_PASSWORD", ""),
     imapHost: envString("IMAP_HOST", inferredImapHost),
     imapPort: Math.max(1, toInteger(envString("IMAP_PORT", "993"), 993)),
+    disableSmtpCheck: toBoolean(process.env.DISABLE_SMTP_CHECK, false),
+    disableImapCheck: toBoolean(process.env.DISABLE_IMAP_CHECK, false),
   };
 }
 
@@ -1055,7 +1087,8 @@ app.post("/api/jobs", async (req, res) => {
       smtpPort: config.smtpPort,
       receiverEmail: config.receiverEmail || "(self)",
       imapHost: config.imapHost,
-      imapVerificationEnabled: Boolean(config.receiverEmail && config.receiverPassword),
+      imapVerificationEnabled: Boolean(config.receiverEmail && config.receiverPassword && !config.disableImapCheck && !config.disableSmtpCheck),
+      smtpVerificationEnabled: !config.disableSmtpCheck,
     },
   };
 
