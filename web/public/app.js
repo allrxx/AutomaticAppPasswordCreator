@@ -288,7 +288,7 @@ function resetView() {
   latestJob = null;
   setBadge("queued");
   stageTitle.textContent = "Workflow queued";
-  stageText.textContent = "Stage 0/3";
+  stageText.textContent = "Stage 0/2";
   progressText.textContent = "0% complete";
   progressBar.style.width = "0%";
   jobMeta.textContent = "Preparing workflow...";
@@ -461,7 +461,7 @@ form.addEventListener("submit", async (event) => {
     startBtn.disabled = false;
     setBadge("failed");
     stageTitle.textContent = "Could not start workflow";
-    stageText.textContent = "Stage 0/3";
+    stageText.textContent = "Stage 0/2";
     progressText.textContent = "0% complete";
     jobMeta.textContent = "Fix server configuration and try again.";
 

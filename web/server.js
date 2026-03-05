@@ -103,7 +103,7 @@ function buildQueuedProgress() {
     stageKey: "queued",
     stageLabel: "Queued",
     stageCurrent: 0,
-    stageTotal: WORKFLOW_STAGES.validation.total,
+    stageTotal: 1, // Will be updated when workflow starts
     detail: "Waiting for worker",
     completed: 0,
     total: 0,
@@ -114,23 +114,22 @@ function buildQueuedProgress() {
 }
 
 function setProgress(job, stageKey, completed, total, detail = "") {
-  const stage = getStage(stageKey);
   const safeCompleted = Math.max(0, Number(completed) || 0);
   const safeTotal = Math.max(0, Number(total) || 0);
-  const stageRatio = safeTotal > 0 ? Math.min(1, safeCompleted / safeTotal) : 1;
-  const overallRatio = ((stage.index - 1) + stageRatio) / stage.total;
+  let overallRatio = safeTotal > 0 ? safeCompleted / safeTotal : 0;
+  overallRatio = Math.min(1, Math.max(0, overallRatio));
 
   job.progress = {
-    stageKey: stage.key,
-    stageLabel: stage.label,
-    stageCurrent: stage.index,
-    stageTotal: stage.total,
+    stageKey: stageKey || "processing",
+    stageLabel: stageKey === "imap" ? "Validating Delivery" : "Processing pipelines",
+    stageCurrent: stageKey === "imap" ? 2 : 1,
+    stageTotal: 2,
     detail: detail || "",
     completed: safeCompleted,
     total: safeTotal,
-    stagePercent: Math.round(stageRatio * 100),
-    percent: Math.round(overallRatio * 100),
-    phase: stage.label,
+    stagePercent: Math.round(overallRatio * 100),
+    percent: stageKey === "imap" ? 50 + Math.round(overallRatio * 50) : Math.round(overallRatio * 50),
+    phase: stageKey === "imap" ? "Validating delivery" : "Processing pipelines",
   };
   job.updatedAt = nowIso();
 }
@@ -625,6 +624,85 @@ async function writeJobCsv(job) {
   job.csvPath = filePath;
 }
 
+async function processCandidateTracker(row, index, total, browser, config, job, globalState) {
+  const candidateStart = logStepStart(job, "process-candidate", { email: row.email });
+  try {
+    // 1. Mailbox Creation
+    const rowCreateStart = logStepStart(job, "mailbox-create-row", { index: index + 1, email: row.email });
+    const resultMailbox = await createMailboxViaApi(config, row);
+    row.mailbox_created = resultMailbox.ok;
+    if (resultMailbox.ok) {
+      addLog(job, "info", `[${index + 1}/${total}] Mailbox created: ${row.email}`);
+      logStepSuccess(job, "mailbox-create-row", rowCreateStart);
+    } else {
+      appendRowError(row, `Create mailbox failed: ${resultMailbox.message}`);
+      addLog(job, "error", `[${index + 1}/${total}] Mailbox create failed: ${row.email} (${resultMailbox.message})`);
+      throw new Error(resultMailbox.message || "Mailbox create failed");
+    }
+
+    globalState.completedOps += 1;
+    setProgress(job, "pipeline", globalState.completedOps, globalState.totalOps, `Pipeline active: ${globalState.completedOps} sub-tasks finished`);
+
+    // 2. App Password Generation
+    const appPassword = buildAppPassword();
+    const rowAppPasswordStart = logStepStart(job, "app-password-row", { index: index + 1, email: row.email });
+
+    // Playwright browser action for this specific row
+    const resultAppPwd = await createAppPasswordInWebmail(config, row, appPassword, browser, (message, details) => {
+      addLog(job, "debug", `[${index + 1}/${total}] ${row.email} :: ${message}`, details);
+    });
+    row.app_password_generated = resultAppPwd.ok;
+
+    if (resultAppPwd.ok) {
+      row.app_password = appPassword;
+      addLog(job, "info", `[${index + 1}/${total}] App password created: ${row.email}`);
+      logStepSuccess(job, "app-password-row", rowAppPasswordStart);
+    } else {
+      appendRowError(row, `App password failed: ${resultAppPwd.message}`);
+      addLog(job, "error", `[${index + 1}/${total}] App password failed: ${row.email} (${resultAppPwd.message})`);
+      throw new Error(resultAppPwd.message || "App password creation failed");
+    }
+
+    globalState.completedOps += 1;
+    setProgress(job, "pipeline", globalState.completedOps, globalState.totalOps, `Pipeline active: ${globalState.completedOps} sub-tasks finished`);
+
+    // 3. SMTP Send Validation
+    const requiresSmtp = !config.disableSmtpCheck;
+    if (requiresSmtp) {
+      const subject = `SMTP Check ${job.id}-${index + 1}-${crypto.randomBytes(3).toString("hex")}`;
+      const targetEmail = config.receiverEmail || row.email;
+      const smtpRowStart = logStepStart(job, "smtp-row", { index: index + 1, email: row.email });
+
+      try {
+        await sendSmtpValidation(config, row, subject, targetEmail, (message, details) => {
+          addLog(job, "debug", `[${index + 1}/${total}] ${row.email} :: ${message}`, details);
+        });
+        row.smtp_sent = true;
+        row.smtp_subject = subject;
+        globalState.smtpSubjects.add(subject);
+        addLog(job, "info", `[${index + 1}/${total}] SMTP sent: ${row.email} -> ${targetEmail}`);
+        logStepSuccess(job, "smtp-row", smtpRowStart);
+      } catch (error) {
+        appendRowError(row, `SMTP send failed: ${error.message || "Unknown SMTP error"}`);
+        addLog(job, "error", `[${index + 1}/${total}] SMTP failed: ${row.email} (${error.message})`);
+        throw error;
+      }
+    } else {
+      row.smtp_sent = false; // Intentionally disabled
+    }
+
+    if (requiresSmtp) {
+      globalState.completedOps += 1;
+      setProgress(job, "pipeline", globalState.completedOps, globalState.totalOps, `Pipeline active: ${globalState.completedOps} sub-tasks finished`);
+    }
+
+    logStepSuccess(job, "process-candidate", candidateStart, { email: row.email });
+  } catch (err) {
+    logStepFailure(job, "process-candidate", candidateStart, err, { email: row.email });
+    // Keep working on other candidates despite one failure
+  }
+}
+
 async function runWorkflow(job, config) {
   const workflowStart = Date.now();
   job.status = "running";
@@ -632,6 +710,7 @@ async function runWorkflow(job, config) {
   addLog(job, "info", "Workflow started");
   addLog(job, "info", "Runtime configuration loaded", sanitizeConfigForLogs(config));
 
+  // 1. Initialization and Data Generation
   const generationStepStart = logStepStart(job, "record-generation", { requestedCount: config.count });
   const rows = [];
   for (let index = 0; index < config.count; index += 1) {
@@ -651,310 +730,152 @@ async function runWorkflow(job, config) {
       smtp_subject: "",
     });
   }
+  job.rows = rows;
   logStepSuccess(job, "record-generation", generationStepStart, {
     generatedRows: rows.length,
     sampleEmails: rows.slice(0, 3).map((r) => redactEmail(r.email)),
   });
 
-  job.rows = rows;
   addLog(job, "info", `Generated ${rows.length} mailbox records`);
 
-  const mailboxPhaseStart = logStepStart(job, "phase:create-mailboxes", { totalRows: rows.length });
-  setProgress(job, "mailbox", 0, rows.length, "Preparing mailbox creation");
-  for (let i = 0; i < rows.length; i += 1) {
-    const row = rows[i];
-    const rowCreateStart = logStepStart(job, "mailbox-create-row", {
-      index: i + 1,
-      total: rows.length,
-      email: row.email,
-    });
-
-    const result = await createMailboxViaApi(config, row);
-    row.mailbox_created = result.ok;
-    if (result.ok) {
-      addLog(job, "info", `[${i + 1}/${rows.length}] Mailbox created: ${row.email}`, {
-        httpStatus: result.httpStatus,
-      });
-      logStepSuccess(job, "mailbox-create-row", rowCreateStart, {
-        index: i + 1,
-        email: row.email,
-        httpStatus: result.httpStatus,
-      });
-    } else {
-      appendRowError(row, `Create mailbox failed: ${result.message}`);
-      const failureError = new Error(result.message || "Mailbox create failed");
-      addLog(job, "error", `[${i + 1}/${rows.length}] Mailbox create failed: ${row.email} (${result.message})`, {
-        httpStatus: result.httpStatus,
-      });
-      logStepFailure(job, "mailbox-create-row", rowCreateStart, failureError, {
-        index: i + 1,
-        email: row.email,
-        httpStatus: result.httpStatus,
-      });
-    }
-
-    setProgress(job, "mailbox", i + 1, rows.length, `Created ${i + 1} of ${rows.length} mailboxes`);
-    await wait(120);
-  }
-  logStepSuccess(job, "phase:create-mailboxes", mailboxPhaseStart, {
-    attempted: rows.length,
-    created: rows.filter((r) => r.mailbox_created).length,
-    failed: rows.filter((r) => !r.mailbox_created).length,
-  });
-
-  const rowsReadyForAppPassword = rows.filter((r) => r.mailbox_created);
-  addLog(job, "info", `${rowsReadyForAppPassword.length} mailbox(es) eligible for app password generation`);
-
-  if (rowsReadyForAppPassword.length > 0) {
-    const appPasswordPhaseStart = logStepStart(job, "phase:generate-app-passwords", {
-      eligibleRows: rowsReadyForAppPassword.length,
-      headless: config.headless,
-    });
-    const browserLaunchStart = logStepStart(job, "playwright-launch-browser", { headless: config.headless });
-    const browser = await chromium.launch({ headless: config.headless });
-    logStepSuccess(job, "playwright-launch-browser", browserLaunchStart);
-
-    try {
-      setProgress(job, "appPassword", 0, rowsReadyForAppPassword.length, "Opening webmail automation");
-
-      for (let i = 0; i < rowsReadyForAppPassword.length; i += 1) {
-        const row = rowsReadyForAppPassword[i];
-        const appPassword = buildAppPassword();
-        const rowAppPasswordStart = logStepStart(job, "app-password-row", {
-          index: i + 1,
-          total: rowsReadyForAppPassword.length,
-          email: row.email,
-          appName: config.appName,
-        });
-
-        const result = await createAppPasswordInWebmail(config, row, appPassword, browser, (message, details) => {
-          addLog(job, "debug", `[${i + 1}/${rowsReadyForAppPassword.length}] ${row.email} :: ${message}`, details);
-        });
-        row.app_password_generated = result.ok;
-
-        if (result.ok) {
-          row.app_password = appPassword;
-          addLog(job, "info", `[${i + 1}/${rowsReadyForAppPassword.length}] App password created: ${row.email}`);
-          logStepSuccess(job, "app-password-row", rowAppPasswordStart, {
-            index: i + 1,
-            email: row.email,
-          });
-        } else {
-          appendRowError(row, `App password failed: ${result.message}`);
-          const failureError = new Error(result.message || "App password creation failed");
-          addLog(job, "error", `[${i + 1}/${rowsReadyForAppPassword.length}] App password failed: ${row.email} (${result.message})`, {
-            step: result.step || "unknown",
-          });
-          logStepFailure(job, "app-password-row", rowAppPasswordStart, failureError, {
-            index: i + 1,
-            email: row.email,
-            step: result.step || "unknown",
-          });
-        }
-
-        setProgress(
-          job,
-          "appPassword",
-          i + 1,
-          rowsReadyForAppPassword.length,
-          `Generated ${i + 1} of ${rowsReadyForAppPassword.length} app passwords`
-        );
-      }
-    } finally {
-      const browserCloseStart = logStepStart(job, "playwright-close-browser");
-      await browser.close();
-      logStepSuccess(job, "playwright-close-browser", browserCloseStart);
-      logStepSuccess(job, "phase:generate-app-passwords", appPasswordPhaseStart, {
-        attempted: rowsReadyForAppPassword.length,
-        generated: rows.filter((r) => r.app_password_generated).length,
-        failed: rows.filter((r) => r.mailbox_created && !r.app_password_generated).length,
-      });
-    }
-  } else {
-    setProgress(job, "appPassword", 0, 0, "Skipped: no mailbox available for app password generation");
-    addLog(job, "warn", "No mailboxes qualified for app password generation");
-  }
-
-  const rowsReadyForSmtp = rows.filter((r) => r.app_password_generated);
-  addLog(job, "info", `${rowsReadyForSmtp.length} mailbox(es) eligible for SMTP validation`);
-
-  // Imap requires SMTP to have been sent. If SMTP is disabled, IMAP must also be disabled.
+  // Global state for progress and unified SMTP subject tracking across workers
   const requiresSmtp = !config.disableSmtpCheck;
   const requiresImap = requiresSmtp && !config.disableImapCheck && Boolean(config.receiverPassword && config.receiverEmail);
 
-  if (!requiresSmtp) {
-    addLog(job, "warn", "SMTP validation is globally disabled via DISABLE_SMTP_CHECK flag");
-  } else if (!config.receiverEmail) {
-    addLog(
-      job,
-      "warn",
-      "VALIDATION_RECEIVER_EMAIL not set. SMTP validation will send each email to itself."
-    );
-  }
+  let totalOpsPerCandidate = 2; // Mailbox + App Password
+  if (requiresSmtp) totalOpsPerCandidate += 1; // + SMTP
 
-  const smtpPhaseStart = logStepStart(job, "phase:smtp-validation", {
-    eligibleRows: rowsReadyForSmtp.length,
-    host: config.smtpHost,
-    port: config.smtpPort,
-  });
-  let validationTotalUnits = 0;
-  if (requiresSmtp) validationTotalUnits += rowsReadyForSmtp.length;
-  if (requiresImap) validationTotalUnits += rowsReadyForSmtp.length;
+  const globalState = {
+    completedOps: 0,
+    totalOps: rows.length * totalOpsPerCandidate,
+    smtpSubjects: new Set()
+  };
 
-  setProgress(job, "validation", 0, validationTotalUnits || 1, "Preparing SMTP validation");
-  const smtpStartDate = new Date();
+  // Launch the shared browser instance for UI automation
+  const browserLaunchStart = logStepStart(job, "playwright-launch-browser", { headless: config.headless });
+  const browser = await chromium.launch({ headless: config.headless });
+  logStepSuccess(job, "playwright-launch-browser", browserLaunchStart);
 
-  if (requiresSmtp) {
-    for (let i = 0; i < rowsReadyForSmtp.length; i += 1) {
-      const row = rowsReadyForSmtp[i];
-      const subject = `SMTP Check ${job.id}-${i + 1}-${crypto.randomBytes(3).toString("hex")}`;
-      const targetEmail = config.receiverEmail || row.email;
-      const smtpRowStart = logStepStart(job, "smtp-row", {
-        index: i + 1,
-        total: rowsReadyForSmtp.length,
-        email: row.email,
-        subject,
-        targetEmail,
-      });
+  try {
+    setProgress(job, "pipeline", 0, globalState.totalOps, "Starting parallel processing pipeline");
+    const pipelineStart = logStepStart(job, "phase:parallel-pipeline");
+    const smtpStartDate = new Date();
 
-      try {
-        await sendSmtpValidation(config, row, subject, targetEmail, (message, details) => {
-          addLog(job, "debug", `[${i + 1}/${rowsReadyForSmtp.length}] ${row.email} :: ${message}`, details);
-        });
-        row.smtp_sent = true;
-        row.smtp_subject = subject;
-        addLog(job, "info", `[${i + 1}/${rowsReadyForSmtp.length}] SMTP sent: ${row.email} -> ${targetEmail}`);
-        logStepSuccess(job, "smtp-row", smtpRowStart, {
-          index: i + 1,
-          email: row.email,
-          targetEmail,
-        });
-      } catch (error) {
-        appendRowError(row, `SMTP send failed: ${error.message || "Unknown SMTP error"}`);
-        addLog(job, "error", `[${i + 1}/${rowsReadyForSmtp.length}] SMTP failed: ${row.email} (${error.message})`);
-        logStepFailure(job, "smtp-row", smtpRowStart, error, {
-          index: i + 1,
-          email: row.email,
-        });
+    // The Worker Pool (Bounded Concurrency)
+    const WORKER_CONCURRENCY = 5; // Maximum parallel Playwright browser contexts
+    let currentIndex = 0;
+
+    // Worker function loop: keeps pulling jobs until none are left
+    const worker = async (workerId) => {
+      // Stagger initial start times to avoid spiking the mailcow instance
+      if (workerId > 0) {
+        await wait(workerId * 300);
       }
 
-      setProgress(
-        job,
-        "validation",
-        i + 1,
-        validationTotalUnits,
-        `SMTP validated ${i + 1} of ${rowsReadyForSmtp.length} accounts`
-      );
-      await wait(150);
+      while (currentIndex < rows.length) {
+        const idx = currentIndex;
+        currentIndex++;
+        if (idx >= rows.length) break;
+
+        const row = rows[idx];
+        addLog(job, "debug", `[Worker ${workerId}] Starting candidate ${idx + 1}/${rows.length}`);
+        await processCandidateTracker(row, idx, rows.length, browser, config, job, globalState);
+      }
+    };
+
+    // Spin up workers
+    const workers = [];
+    const numWorkers = Math.min(WORKER_CONCURRENCY, rows.length);
+    for (let i = 0; i < numWorkers; i++) {
+      workers.push(worker(i));
     }
-    logStepSuccess(job, "phase:smtp-validation", smtpPhaseStart, {
-      attempted: rowsReadyForSmtp.length,
-      sent: rows.filter((r) => r.smtp_sent).length,
-      failed: rows.filter((r) => r.app_password_generated && !r.smtp_sent).length,
+
+    await Promise.all(workers);
+    logStepSuccess(job, "phase:parallel-pipeline", pipelineStart, {
+      attempted: rows.length,
+      mailboxesCreated: rows.filter(r => r.mailbox_created).length,
+      appPasswordsGenerated: rows.filter(r => r.app_password_generated).length,
+      smtpSent: rows.filter(r => r.smtp_sent).length
     });
-  } else {
-    logStepSuccess(job, "phase:smtp-validation", smtpPhaseStart, { skipped: true });
-    setProgress(job, "validation", 0, validationTotalUnits || 1, "SMTP skipped (disabled via flag)");
+
+    // Smart IMAP Verification (If applicable)
+    if (requiresImap) {
+      if (globalState.smtpSubjects.size === 0) {
+        addLog(job, "warn", "No SMTP emails were successfully sent, skipping IMAP validation entirely.");
+        setProgress(job, "imap", 1, 1, "IMAP skipped (no valid SMTPs sent)");
+      } else {
+        const imapPhaseStart = logStepStart(job, "phase:imap-verification");
+        addLog(job, "info", `Waiting up to 60s for IMAP verification of ${globalState.smtpSubjects.size} subjects...`);
+        setProgress(job, "imap", 0, globalState.smtpSubjects.size, "Polling IMAP for verification...");
+
+        const maxImapPolls = 6;
+        let verifiedCount = 0;
+        let foundSubjects = new Set();
+        let loopCount = 0;
+
+        while (loopCount < maxImapPolls) {
+          loopCount++;
+          // First pass pause longer to account for minimum delivery time
+          if (loopCount === 1) { await wait(15_000); }
+          else { await wait(10_000); }
+
+          try {
+            const currentSubjects = await getReceiverSubjects(config, smtpStartDate, () => { });
+            for (const subj of currentSubjects) foundSubjects.add(subj);
+
+            // Reconcile
+            let currentVerifiedCount = 0;
+            for (const subject of globalState.smtpSubjects) {
+              if (foundSubjects.has(subject)) currentVerifiedCount++;
+            }
+
+            verifiedCount = currentVerifiedCount;
+            setProgress(job, "imap", verifiedCount, globalState.smtpSubjects.size, `IMAP polling retry ${loopCount}/${maxImapPolls}: ${verifiedCount}/${globalState.smtpSubjects.size} verified`);
+
+            if (verifiedCount >= globalState.smtpSubjects.size) {
+              addLog(job, "info", `IMAP verification complete early! All ${verifiedCount} messages found.`);
+              break;
+            }
+          } catch (imapErr) {
+            addLog(job, "warn", `IMAP poll ${loopCount} failed: ${imapErr.message}`);
+          }
+        }
+
+        // Apply final IMAP result rows
+        for (const row of rows) {
+          if (row.smtp_sent) {
+            if (foundSubjects.has(row.smtp_subject)) {
+              row.imap_verified = true;
+            } else {
+              row.imap_verified = false;
+              appendRowError(row, "Email not found in receiver inbox during IMAP polling window");
+            }
+          }
+        }
+
+        logStepSuccess(job, "phase:imap-verification", imapPhaseStart, {
+          verified: verifiedCount,
+          expected: globalState.smtpSubjects.size,
+          polls: loopCount
+        });
+      }
+    } else {
+      let skipReason = "not configured";
+      if (config.disableImapCheck) skipReason = "disabled via flag";
+      if (!requiresSmtp) skipReason = "SMTP validation disabled";
+      setProgress(job, "imap", 1, 1, `IMAP skipped (${skipReason})`);
+      if (config.disableImapCheck) addLog(job, "warn", "IMAP verification globally disabled via DISABLE_IMAP_CHECK flag.");
+      else if (!config.receiverPassword) addLog(job, "warn", "Receiver app password not provided. IMAP verification skipped.");
+    }
+
+  } finally {
+    // Ensuring Playwright is forcefully closed regardless of worker errors
+    const browserCloseStart = logStepStart(job, "playwright-close-browser");
+    await browser.close();
+    logStepSuccess(job, "playwright-close-browser", browserCloseStart);
   }
 
-  if (requiresImap) {
-    const imapPhaseStart = logStepStart(job, "phase:imap-verification", {
-      receiverEmail: redactEmail(config.receiverEmail),
-      imapHost: config.imapHost,
-      imapPort: config.imapPort,
-    });
-    addLog(job, "info", "Waiting 20 seconds before IMAP verification");
-    await wait(20_000);
-
-    const smtpSubjects = new Set(rowsReadyForSmtp.filter((r) => r.smtp_sent).map((r) => r.smtp_subject));
-    setProgress(
-      job,
-      "validation",
-      rowsReadyForSmtp.length,
-      validationTotalUnits,
-      "Waiting for IMAP verification window"
-    );
-    addLog(job, "debug", "Prepared IMAP subject correlation set", {
-      subjectCount: smtpSubjects.size,
-    });
-
-    try {
-      const foundSubjects = await getReceiverSubjects(config, smtpStartDate, (message, details) => {
-        addLog(job, "debug", `IMAP :: ${message}`, details);
-      });
-      let verifiedCount = 0;
-      let processedCount = 0;
-
-      for (const row of rowsReadyForSmtp) {
-        if (!row.smtp_sent) {
-          processedCount += 1;
-          setProgress(
-            job,
-            "validation",
-            rowsReadyForSmtp.length + processedCount,
-            validationTotalUnits,
-            `IMAP verified ${verifiedCount} of ${rowsReadyForSmtp.length} accounts`
-          );
-          continue;
-        }
-
-        if (foundSubjects.has(row.smtp_subject)) {
-          row.imap_verified = true;
-          verifiedCount += 1;
-          addLog(job, "debug", `IMAP verified for ${row.email}`, { subject: row.smtp_subject });
-        } else {
-          row.imap_verified = false;
-          appendRowError(row, "Email not found in receiver inbox during IMAP verification");
-          addLog(job, "warn", `IMAP could not verify ${row.email}`, { subject: row.smtp_subject });
-        }
-
-        processedCount += 1;
-        setProgress(
-          job,
-          "validation",
-          rowsReadyForSmtp.length + processedCount,
-          validationTotalUnits,
-          `IMAP verified ${verifiedCount} of ${rowsReadyForSmtp.length} accounts`
-        );
-      }
-
-      addLog(job, "info", `IMAP verification complete: ${verifiedCount}/${smtpSubjects.size}`);
-      logStepSuccess(job, "phase:imap-verification", imapPhaseStart, {
-        verified: verifiedCount,
-        expected: smtpSubjects.size,
-      });
-    } catch (error) {
-      addLog(job, "error", `IMAP verification failed: ${error.message}`);
-      logStepFailure(job, "phase:imap-verification", imapPhaseStart, error, {
-        expectedSubjects: smtpSubjects.size,
-      });
-      for (const row of rowsReadyForSmtp) {
-        if (row.smtp_sent && !row.imap_verified) {
-          appendRowError(row, `IMAP verification error: ${error.message}`);
-        }
-      }
-    }
-  } else {
-    // Determine reason for skip
-    let skipReason = "not configured";
-    if (config.disableImapCheck) skipReason = "disabled via flag";
-    if (!requiresSmtp) skipReason = "SMTP validation disabled";
-
-    // Only set progress if IMAP was supposedly part of the expected total or if we skipped both
-    if (validationTotalUnits === 0) {
-      setProgress(job, "validation", 1, 1, `Validation skipped (${skipReason})`);
-    } else if (requiresSmtp) {
-      setProgress(job, "validation", rowsReadyForSmtp.length, validationTotalUnits, `IMAP skipped (${skipReason})`);
-    }
-
-    // If receiverPassword is empty it's fine, warn otherwise
-    if (config.disableImapCheck) {
-      addLog(job, "warn", "IMAP verification globally disabled via DISABLE_IMAP_CHECK flag.");
-    } else if (!config.receiverPassword) {
-      addLog(job, "warn", "Receiver app password not provided. IMAP verification skipped.");
-    }
-  }
-
+  // Finalization
   const finalizationStart = logStepStart(job, "phase:finalization");
   for (const row of rows) {
     updateRowStatus(row, requiresImap, requiresSmtp);
@@ -970,7 +891,7 @@ async function runWorkflow(job, config) {
   job.status = job.summary.failed > 0 ? "completed_with_errors" : "completed";
   job.finishedAt = nowIso();
   job.updatedAt = nowIso();
-  setProgress(job, "validation", 1, 1, "Workflow completed");
+  setProgress(job, "imap", 1, 1, "Workflow completed");
   logStepSuccess(job, "phase:finalization", finalizationStart);
 
   addLog(
@@ -1194,7 +1115,12 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
     const tsvDir = path.dirname(TSV_INPUT_PATH);
     await fsPromises.mkdir(tsvDir, { recursive: true });
     await fsPromises.writeFile(TSV_INPUT_PATH, tsvData, "utf8");
-    addStep("Write TSV file", "success", `Wrote ${successRows.length} row(s) to ${path.basename(TSV_INPUT_PATH)}`);
+
+    // Duplicate write to test.tsv alongside user_email_pool.tsv
+    const testTsvPath = path.join(tsvDir, "all.tsv");
+    await fsPromises.writeFile(testTsvPath, tsvData, "utf8");
+
+    addStep("Write TSV file", "success", `Wrote ${successRows.length} row(s) to ${path.basename(TSV_INPUT_PATH)} and test.tsv`);
   } catch (tsvError) {
     addStep("Write TSV file", "failed", "Could not write credentials file", tsvError.message);
     console.error(`[api] TSV write error | jobId=${job.id} | error=${tsvError.message}`);
