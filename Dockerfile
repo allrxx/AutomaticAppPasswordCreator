@@ -17,8 +17,8 @@ RUN npm ci --omit=dev --no-audit --no-fund
 # Copy the web service code.
 COPY web/ ./
 
-# Install bash + openssl needed by encrypt_email_pool.sh
-RUN apt-get update && apt-get install -y --no-install-recommends bash openssl \
+# Install bash + openssl + git needed by encrypt/push scripts
+RUN apt-get update && apt-get install -y --no-install-recommends bash openssl git \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure output directory exists for CSV exports.

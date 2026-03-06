@@ -34,6 +34,7 @@ const DEPLOY_CHOICE_MAP = Object.freeze({
 
 const DB_MGMT_MOUNT = "/mnt/db-mgmt";
 const ENCRYPT_SCRIPT = path.join(DB_MGMT_MOUNT, "scripts", "encrypt_email_pool.sh");
+const PUSH_SCRIPT = path.join(DB_MGMT_MOUNT, "scripts", "push_email_pool.sh");
 const TSV_INPUT_PATH = path.join(DB_MGMT_MOUNT, "scripts", "user_email_pool.tsv");
 
 app.use(express.json({ limit: "1mb" }));
@@ -1081,6 +1082,11 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
     return res.status(500).json({ error: "Encrypt script not found. Verify the Docker volume mount for /mnt/db-mgmt is configured.", steps });
   }
 
+  if (!fs.existsSync(PUSH_SCRIPT)) {
+    addStep("Validate job data", "failed", "Push script not found", `Script not found at ${PUSH_SCRIPT}. Check Docker volume mount.`);
+    return res.status(500).json({ error: "Push script not found. Verify the Docker volume mount for /mnt/db-mgmt is configured.", steps });
+  }
+
   const decryptKey = process.env.EMAIL_POOL_DECRYPT_KEY_BASE64 || "";
   if (!decryptKey) {
     addStep("Validate job data", "failed", "Decrypt key missing", "EMAIL_POOL_DECRYPT_KEY_BASE64 is not set in the environment.");
@@ -1135,7 +1141,7 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
       let stdout = "";
       let stderr = "";
 
-      const proc = spawn("bash", [ENCRYPT_SCRIPT], {
+      const proc = spawn("bash", [ENCRYPT_SCRIPT, deployment], {
         cwd: DB_MGMT_MOUNT,
         env: {
           ...process.env,
@@ -1154,7 +1160,6 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
         stderr += chunk.toString();
       });
 
-      proc.stdin.write(`${envChoice}\n`);
       proc.stdin.end();
 
       proc.on("close", (code) => {
@@ -1183,36 +1188,71 @@ app.post("/api/jobs/:jobId/deploy", async (req, res) => {
 
     addStep("Execute encrypt script", "success", "Script completed successfully");
 
-    // --- Step 4: Parse script output for sub-steps ---
-    const outputLines = (scriptResult.stdout || "").split("\n").filter((l) => l.trim());
-    for (const line of outputLines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+    // --- Step 4: Execute push script (git add/commit/push on the VM) ---
+    console.log(`[api] Running push script for ${deployment} | jobId=${job.id}`);
 
-      // Detect common meaningful lines from the shell script output
-      if (/encrypt/i.test(trimmed)) {
-        addStep("Encrypt email pool", "success", trimmed);
-      } else if (/git\s+(add|stage)/i.test(trimmed)) {
-        addStep("Git stage changes", "success", trimmed);
-      } else if (/git\s+commit/i.test(trimmed)) {
-        addStep("Git commit", "success", trimmed);
-      } else if (/git\s+push/i.test(trimmed)) {
-        addStep("Git push", "success", trimmed);
-      } else if (/done|complete|success|finished/i.test(trimmed)) {
-        addStep("Finalization", "success", trimmed);
-      }
+    const pushResult = await new Promise((resolve) => {
+      let stdout = "";
+      let stderr = "";
+
+      const proc = spawn("bash", [PUSH_SCRIPT, deployment], {
+        cwd: DB_MGMT_MOUNT,
+        env: {
+          ...process.env,
+          GITHUB_TOKEN: process.env.GITHUB_TOKEN || "",
+          PATH: process.env.PATH || "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 120_000,
+      });
+
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.stdin.end();
+
+      proc.on("close", (code) => {
+        resolve({ code, stdout, stderr });
+      });
+
+      proc.on("error", (err) => {
+        resolve({ code: -1, stdout, stderr: stderr + err.message });
+      });
+    });
+
+    console.log(`[api] Push script exit code: ${pushResult.code}`);
+    if (pushResult.stdout) console.log(`[api] Push script stdout:\n${pushResult.stdout}`);
+    if (pushResult.stderr) console.warn(`[api] Push script stderr:\n${pushResult.stderr}`);
+
+    if (pushResult.code !== 0) {
+      addStep("Git push to repository", "failed", `Exit code: ${pushResult.code}`, pushResult.stderr || pushResult.stdout || "Push script exited with non-zero code");
+      return res.status(500).json({
+        error: "Push script failed",
+        exitCode: pushResult.code,
+        stdout: pushResult.stdout,
+        stderr: pushResult.stderr,
+        steps,
+      });
     }
+
+    addStep("Git push to repository", "success", "Changes committed and pushed");
 
     return res.json({
       success: true,
       message: "Credentials encrypted and deployed successfully",
       credentialsCount: successRows.length,
       deployment,
-      scriptOutput: scriptResult.stdout,
+      encryptOutput: scriptResult.stdout,
+      pushOutput: pushResult.stdout,
       steps,
     });
   } catch (error) {
-    addStep("Execute encrypt script", "failed", "Unexpected error", error.message);
+    addStep("Deploy", "failed", "Unexpected error", error.message);
     console.error(`[api] Deployment error | jobId=${job.id} | error=${error.message}`);
     return res.status(500).json({
       error: "Deployment failed",
